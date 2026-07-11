@@ -10,6 +10,10 @@ const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 const app = express();
 
+// Railway (and most PaaS hosts) sit behind a reverse proxy that sets
+// X-Forwarded-For; express-rate-limit needs this to identify clients correctly.
+app.set('trust proxy', 1);
+
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(
   cors({
