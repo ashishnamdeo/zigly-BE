@@ -1,0 +1,476 @@
+{% comment %}
+  Prescription upload widget for the product page. Has its own "Send
+  Prescription" button that validates and POSTs name/phone/file directly to
+  the Node.js backend, independent of "Add to Cart". The file input is still
+  associated with the product form (`form="product-form-{{ section.id }}"`,
+  `name="properties[Prescription upload]"`), so whenever the customer does
+  click Add to Cart (wherever that button lives on the page), the same file
+  is also attached to the order as a cart line item property — a bonus audit
+  trail, not a dependency of the WhatsApp send.
+
+  IMPORTANT: set RX_UPLOAD_ENDPOINT below to your deployed backend's
+  /api/prescription/upload URL before going live.
+{% endcomment %}
+
+<style>
+  .rx-upload-wrapper {
+    font-family: inherit;
+    color: #1a1a1a;
+  }
+  .rx-upload-title {
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.3px;
+    margin-bottom: 12px;
+  }
+  .rx-upload-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 900px) {
+    .rx-upload-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  .rx-panel {
+    border: 1px solid #e2e2e2;
+    border-radius: 6px;
+    padding: 20px;
+  }
+  .rx-panel-label {
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+  .rx-field {
+    margin-bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .rx-field label {
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .rx-field input {
+    padding: 10px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  .rx-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background-color: #0f4c4c;
+    color: #fff;
+    border: none;
+    padding: 12px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    cursor: pointer;
+  }
+  .rx-btn:hover {
+    background-color: #0c3d3d;
+  }
+  .rx-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .rx-btn-send {
+    margin-top: 16px;
+    background-color: #1a6b3c;
+  }
+  .rx-btn-send:hover {
+    background-color: #145430;
+  }
+  #rx-success-message {
+    margin-top: 10px;
+    color: #157a3f;
+    font-size: 13px;
+    display: none;
+  }
+  .rx-or-divider {
+    text-align: center;
+    font-size: 12px;
+    color: #888;
+    margin: 14px 0;
+    letter-spacing: 1px;
+  }
+  .rx-preview-empty {
+    margin-top: 28px;
+    text-align: center;
+    color: #999;
+    font-size: 13px;
+  }
+  .rx-preview-empty svg {
+    display: block;
+    margin: 0 auto 10px;
+    color: #ccc;
+  }
+  .rx-preview-grid {
+    margin-top: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .rx-preview-grid img {
+    width: 70px;
+    height: 70px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    cursor: pointer;
+  }
+  .rx-preview-grid .rx-file-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 12px;
+    background: #f5f5f5;
+  }
+  .rx-requirements-box {
+    background-color: #fbf7ef;
+    border-radius: 6px;
+    padding: 20px;
+  }
+  .rx-requirements-list {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px 10px;
+    text-align: center;
+    margin-top: 8px;
+  }
+  .rx-req-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background-color: #d9ebe4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 8px;
+    font-size: 22px;
+    color: #0f4c4c;
+  }
+  .rx-req-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0f2b4c;
+  }
+  .rx-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 20px;
+    font-size: 12px;
+    font-style: italic;
+    color: #555;
+  }
+  .rx-note svg {
+    color: #e0a000;
+    margin-top: 1px;
+    flex-shrink: 0;
+  }
+  .rx-sample-label {
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+  .rx-sample-box {
+    border: 1px solid #e2e2e2;
+    border-radius: 6px;
+    min-height: 420px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #fafafa;
+    overflow: hidden;
+  }
+  .rx-sample-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .rx-sample-placeholder {
+    color: #aaa;
+    font-size: 13px;
+    text-align: center;
+    padding: 20px;
+  }
+  #rx-error-message {
+    margin-top: 10px;
+    color: #d3302f;
+    font-size: 13px;
+    display: none;
+  }
+</style>
+
+<div class="rx-upload-wrapper">
+  <div class="rx-upload-title">UPLOAD PRESCRIPTIONS</div>
+
+  <div class="rx-upload-grid">
+
+    <!-- LEFT PANEL: customer details + upload controls + thumbnail -->
+    <div class="rx-panel">
+      <div class="rx-field">
+        <label for="rx-customer-name">Full name</label>
+        <input type="text" id="rx-customer-name" placeholder="Your full name" required />
+      </div>
+      <div class="rx-field">
+        <label for="rx-customer-phone">WhatsApp phone number</label>
+        <input type="tel" id="rx-customer-phone" placeholder="e.g. 91XXXXXXXXXX" required />
+      </div>
+
+      <div class="rx-panel-label">Choose from the following to upload prescription (JPG, PNG, or PDF, max 10MB):</div>
+
+      <input id="file-prescription-upload" form="{{ 'product-form-' | append: section.id }}"
+        name="properties[Prescription upload]" style="display: none;" type="file"
+        accept="image/jpeg,image/png,application/pdf" required />
+
+      <button id="button-gallery-upload" type="button" class="rx-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        CHOOSE FROM GALLERY
+      </button>
+
+      <div class="rx-or-divider">OR</div>
+
+      <button id="button-eprescription-upload" type="button" class="rx-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        SELECT FROM E-PRESCRIPTION
+      </button>
+
+      <div id="rx-preview-empty" class="rx-preview-empty">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+        Uploaded prescription will be shown here
+      </div>
+
+      <div id="rx-preview-grid" class="rx-preview-grid"></div>
+
+      <button id="button-send-prescription" type="button" class="rx-btn rx-btn-send">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        SEND PRESCRIPTION
+      </button>
+
+      <p id="rx-success-message"></p>
+      <p id="rx-error-message"></p>
+    </div>
+
+    <!-- MIDDLE PANEL: requirements checklist -->
+    <div class="rx-panel rx-requirements-box">
+      <div class="rx-sample-label">Make sure the prescription you upload contains the following elements:</div>
+      <div class="rx-requirements-list">
+        <div>
+          <div class="rx-req-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6v0a6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.2.2 0 1 0 .3.3"/><path d="M8 15v1a6 6 0 0 0 6 6v0a6 6 0 0 0 6-6v-4"/><circle cx="20" cy="10" r="2"/></svg>
+          </div>
+          <div class="rx-req-label">Doctor Details</div>
+        </div>
+        <div>
+          <div class="rx-req-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          </div>
+          <div class="rx-req-label">Date of Prescription</div>
+        </div>
+        <div>
+          <div class="rx-req-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </div>
+          <div class="rx-req-label">Patient Details</div>
+        </div>
+        <div>
+          <div class="rx-req-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>
+          </div>
+          <div class="rx-req-label">Medicine Details</div>
+        </div>
+        <div>
+          <div class="rx-req-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          </div>
+          <div class="rx-req-label">Maximum File Size (10 MB)</div>
+        </div>
+      </div>
+      <div class="rx-note">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Our pharmacist will dispense medicines only if the prescription is valid & it meets all government regulations.
+      </div>
+    </div>
+
+    <!-- RIGHT PANEL: sample image, replaced by uploaded file preview once chosen -->
+    <div class="rx-panel">
+      <div class="rx-sample-label" id="rx-sample-title">View Sample Prescription below:</div>
+      <div class="rx-sample-box" id="rx-sample-box">
+        <!-- Replace this src with your actual sample prescription asset -->
+        <div class="rx-sample-placeholder" id="rx-sample-placeholder">Sample prescription image goes here</div>
+        <img id="rx-uploaded-preview" style="display:none;" alt="Uploaded prescription preview" />
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  (function () {
+    // TODO: point this at your deployed backend's upload endpoint.
+    const RX_UPLOAD_ENDPOINT = 'https://your-backend-domain.com/api/prescription/upload';
+    const RX_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
+    const RX_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+    const RX_PHONE_REGEX = /^\+?[0-9]{8,15}$/;
+
+    const rxFileInput = document.getElementById('file-prescription-upload');
+    const rxPreviewGrid = document.getElementById('rx-preview-grid');
+    const rxPreviewEmpty = document.getElementById('rx-preview-empty');
+    const rxErrorMessage = document.getElementById('rx-error-message');
+    const rxSampleTitle = document.getElementById('rx-sample-title');
+    const rxSamplePlaceholder = document.getElementById('rx-sample-placeholder');
+    const rxUploadedPreview = document.getElementById('rx-uploaded-preview');
+    const rxNameInput = document.getElementById('rx-customer-name');
+    const rxPhoneInput = document.getElementById('rx-customer-phone');
+    const rxSendButton = document.getElementById('button-send-prescription');
+    const rxSuccessMessage = document.getElementById('rx-success-message');
+
+    const RX_SAMPLE_PLACEHOLDER_DEFAULT = rxSamplePlaceholder.textContent;
+    const RX_SAMPLE_TITLE_DEFAULT = rxSampleTitle.textContent;
+    const RX_SEND_BUTTON_DEFAULT_HTML = rxSendButton.innerHTML;
+
+    function rxShowImageInSamplePanel(dataUrl) {
+      rxSampleTitle.textContent = 'Uploaded prescription:';
+      rxSamplePlaceholder.style.display = 'none';
+      rxUploadedPreview.src = dataUrl;
+      rxUploadedPreview.style.display = 'block';
+    }
+
+    function rxShowPdfInSamplePanel(filename) {
+      rxSampleTitle.textContent = 'Uploaded prescription:';
+      rxUploadedPreview.style.display = 'none';
+      rxUploadedPreview.src = '';
+      rxSamplePlaceholder.textContent = 'PDF selected: ' + filename;
+      rxSamplePlaceholder.style.display = 'block';
+    }
+
+    function rxResetSamplePanel() {
+      rxSampleTitle.textContent = RX_SAMPLE_TITLE_DEFAULT;
+      rxSamplePlaceholder.textContent = RX_SAMPLE_PLACEHOLDER_DEFAULT;
+      rxSamplePlaceholder.style.display = 'block';
+      rxUploadedPreview.style.display = 'none';
+      rxUploadedPreview.src = '';
+    }
+
+    function rxResetSendState() {
+      rxSendButton.disabled = false;
+      rxSendButton.innerHTML = RX_SEND_BUTTON_DEFAULT_HTML;
+      rxSuccessMessage.style.display = 'none';
+      rxErrorMessage.style.display = 'none';
+    }
+
+    function rxHandleFiles(files) {
+      rxPreviewGrid.innerHTML = '';
+      rxResetSendState();
+
+      if (!files.length) {
+        rxPreviewEmpty.style.display = 'block';
+        rxResetSamplePanel();
+        return;
+      }
+
+      rxPreviewEmpty.style.display = 'none';
+
+      const file = files[0];
+
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          rxShowImageInSamplePanel(e.target.result);
+          const img = document.createElement('img');
+          img.src = e.target.result;
+          img.alt = file.name;
+          img.addEventListener('click', () => rxShowImageInSamplePanel(e.target.result));
+          rxPreviewGrid.appendChild(img);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        rxShowPdfInSamplePanel(file.name);
+        const chip = document.createElement('div');
+        chip.className = 'rx-file-chip';
+        chip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ' + file.name;
+        rxPreviewGrid.appendChild(chip);
+      }
+    }
+
+    rxFileInput.addEventListener('change', function (event) {
+      rxHandleFiles(event.target.files);
+    });
+
+    document.getElementById('button-gallery-upload').addEventListener('click', function () {
+      rxFileInput.click();
+    });
+
+    // Placeholder: wire this to your actual e-prescription source once defined
+    document.getElementById('button-eprescription-upload').addEventListener('click', function () {
+      rxFileInput.click();
+    });
+
+    function rxValidate() {
+      const file = rxFileInput.files[0];
+      if (!rxNameInput.value.trim()) return 'Please enter your name.';
+      if (!RX_PHONE_REGEX.test(rxPhoneInput.value.trim())) return 'Please enter a valid WhatsApp phone number.';
+      if (!file) return 'Please upload your prescription file.';
+      if (!RX_ALLOWED_TYPES.includes(file.type)) return 'Only JPG, PNG, or PDF files are allowed.';
+      if (file.size > RX_MAX_FILE_SIZE_BYTES) return 'File exceeds the maximum allowed size of 10MB.';
+      return null;
+    }
+
+    let rxSubmitInFlight = false;
+
+    rxSendButton.addEventListener('click', function () {
+      if (rxSubmitInFlight) return;
+
+      rxErrorMessage.style.display = 'none';
+      rxSuccessMessage.style.display = 'none';
+
+      const validationError = rxValidate();
+      if (validationError) {
+        rxErrorMessage.textContent = validationError;
+        rxErrorMessage.style.display = 'block';
+        return;
+      }
+
+      rxSubmitInFlight = true;
+      rxSendButton.disabled = true;
+      rxSendButton.textContent = 'Sending...';
+
+      const formData = new FormData();
+      formData.append('name', rxNameInput.value.trim());
+      formData.append('phone', rxPhoneInput.value.trim());
+      formData.append('prescription', rxFileInput.files[0]);
+
+      fetch(RX_UPLOAD_ENDPOINT, { method: 'POST', body: formData })
+        .then(async (response) => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || !data.success) {
+            throw new Error(data.message || 'Failed to send prescription. Please try again.');
+          }
+          rxSuccessMessage.textContent = 'Prescription sent to our pharmacist ✓';
+          rxSuccessMessage.style.display = 'block';
+          rxSendButton.textContent = 'SENT ✓';
+        })
+        .catch((err) => {
+          rxErrorMessage.textContent = err.message || 'Failed to send prescription. Please try again.';
+          rxErrorMessage.style.display = 'block';
+          rxSendButton.disabled = false;
+          rxSendButton.innerHTML = RX_SEND_BUTTON_DEFAULT_HTML;
+        })
+        .finally(() => {
+          rxSubmitInFlight = false;
+        });
+    });
+  })();
+</script>
