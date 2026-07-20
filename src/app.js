@@ -7,6 +7,7 @@ const path = require('path');
 const { config } = require('./config/env');
 const prescriptionRoutes = require('./routes/prescription.routes');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const logger = require('./utils/logger');
 
 const app = express();
 
@@ -29,6 +30,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(process.cwd(), config.uploadDir)));
 
 app.get('/health', (req, res) => res.status(200).json({ success: true, status: 'ok' }));
+
+// Temporary diagnostic endpoint: logs whatever Gupshup's webhook sends so
+// delivery/failure events can be inspected via Railway's deploy logs.
+app.post('/api/gupshup/webhook-debug', (req, res) => {
+  logger.info('Gupshup webhook payload received', { body: req.body });
+  res.status(200).json({ success: true });
+});
 
 app.use('/api/prescription', prescriptionRoutes);
 
