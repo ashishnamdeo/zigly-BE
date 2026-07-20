@@ -1,4 +1,3 @@
-const path = require('path');
 const { config } = require('../config/env');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
@@ -27,19 +26,16 @@ async function uploadPrescription(req, res, next) {
 
     const publicFileUrl = `${config.appBaseUrl}/uploads/${file.filename}`;
 
-    // Notification text goes through the approved HSM template so it's
-    // delivered even without an already-open WhatsApp session. Adjust the "1"/"2"
-    // keys below to match your actual template's placeholder order.
+    // The approved template has an image header, so the prescription photo
+    // and the name/phone notification text go out together in a single
+    // template send. Adjust the "1"/"2" keys below to match your actual
+    // template's placeholder order.
+    // NOTE: for PDF uploads this still sends the PDF as the header "image",
+    // which WhatsApp will likely reject — PDFs need a real fallback header
+    // image or a separate document-message flow, still to be resolved.
     const templateResult = await gupshupService.sendTemplateMessage({
       contentVariables: { 1: name, 2: phone },
-    });
-
-    // The template message above opens/refreshes the session, so the file can
-    // follow as a plain media message.
-    const mediaResult = await gupshupService.sendMediaMessage({
-      mediaUrl: publicFileUrl,
-      body: `Prescription from ${name} (${phone})`,
-      fileExtension: path.extname(file.filename),
+      headerImageUrl: publicFileUrl,
     });
 
     logger.info('Prescription forwarded to WhatsApp', {
@@ -47,7 +43,6 @@ async function uploadPrescription(req, res, next) {
       phone,
       file: file.filename,
       templateResult,
-      mediaResult,
     });
 
     res.status(200).json({

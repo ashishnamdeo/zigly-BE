@@ -38,17 +38,24 @@ async function postToGupshup(path, params) {
  * WhatsApp requires business-initiated messages to use an approved template
  * outside an open 24h session, so the name/phone notification always goes
  * out via the template endpoint (template id + ordered params) rather than
- * a freeform message.
+ * a freeform message. The approved template has an image header, which must
+ * be supplied via a separate "message" field alongside "template" — putting
+ * the image URL inside template.params returns a (#2012) format-mismatch error.
  */
-async function sendTemplateMessage({ contentVariables }) {
+async function sendTemplateMessage({ contentVariables, headerImageUrl }) {
   try {
     const params = Object.keys(contentVariables)
       .sort((a, b) => Number(a) - Number(b))
       .map((key) => contentVariables[key]);
 
-    return await postToGupshup('/template/msg', {
+    const payload = {
       template: JSON.stringify({ id: config.gupshup.templateId, params }),
-    });
+    };
+    if (headerImageUrl) {
+      payload.message = JSON.stringify({ type: 'image', image: { link: headerImageUrl } });
+    }
+
+    return await postToGupshup('/template/msg', payload);
   } catch (err) {
     logger.error('Gupshup template message failed', { error: err.message });
     throw new ApiError(502, 'Failed to send WhatsApp template message via Gupshup', {
