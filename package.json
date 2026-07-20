@@ -1,7 +1,7 @@
 {
   "name": "zigly-prescription-whatsapp-backend",
   "version": "1.0.0",
-  "description": "Express backend that receives prescription uploads from a Shopify storefront and forwards them to WhatsApp via Twilio API",
+  "description": "Express backend that receives prescription uploads from a Shopify storefront and forwards them to WhatsApp via Gupshup API",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -16,7 +16,6 @@
     "helmet": "^8.0.0",
     "morgan": "^1.10.0",
     "multer": "^2.0.1",
-    "twilio": "^5.4.3",
     "uuid": "^11.0.5"
   },
   "devDependencies": {

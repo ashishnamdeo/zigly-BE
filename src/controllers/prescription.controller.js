@@ -1,7 +1,8 @@
+const path = require('path');
 const { config } = require('../config/env');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
-const twilioService = require('../services/twilio.service');
+const gupshupService = require('../services/gupshup.service');
 
 const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
 
@@ -29,15 +30,16 @@ async function uploadPrescription(req, res, next) {
     // Notification text goes through the approved Content Template so it's
     // delivered even without an already-open WhatsApp session. Adjust the "1"/"2"
     // keys below to match your actual template's placeholder order.
-    await twilioService.sendTemplateMessage({
+    await gupshupService.sendTemplateMessage({
       contentVariables: { 1: name, 2: phone },
     });
 
     // The template message above opens/refreshes the session, so the file can
     // follow as a plain media message.
-    await twilioService.sendMediaMessage({
+    await gupshupService.sendMediaMessage({
       mediaUrl: publicFileUrl,
       body: `Prescription from ${name} (${phone})`,
+      fileExtension: path.extname(file.filename),
     });
 
     logger.info('Prescription forwarded to WhatsApp', { name, phone, file: file.filename });

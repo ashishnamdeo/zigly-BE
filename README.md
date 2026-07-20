@@ -2,7 +2,7 @@
 
 Node.js/Express backend that receives a "Upload Prescription" form submission from a
 Shopify storefront and forwards the file plus customer name/phone to a WhatsApp
-number via the Twilio WhatsApp API.
+number via the Gupshup WhatsApp API.
 
 ## Architecture
 
@@ -12,26 +12,26 @@ Shopify storefront (theme section + JS)
         ▼
 Express backend (this repo)
         │  1. Multer validates + stores the file, serves it at a public URL
-        │  2. Sends an approved Content Template message to Twilio (name + phone)
-        │  3. Sends a media message to Twilio (the file, by URL)
+        │  2. Sends an approved HSM template message via Gupshup (name + phone)
+        │  3. Sends a media message via Gupshup (the file, by URL)
         ▼
-Twilio WhatsApp API
+Gupshup WhatsApp API
         │
         ▼
 Predefined WhatsApp number (pharmacist / store)
 ```
 
-Twilio's Messages API fetches media by URL rather than accepting a raw file
+Gupshup's Messages API fetches media by URL rather than accepting a raw file
 upload, so the backend hosts the uploaded file at `APP_BASE_URL/uploads/<file>`
-and passes that URL as `mediaUrl`. This means `APP_BASE_URL` **must** be a
-publicly reachable HTTPS URL in production (Twilio's servers need to fetch it).
+and passes that URL as `media_url`. This means `APP_BASE_URL` **must** be a
+publicly reachable HTTPS URL in production (Gupshup's servers need to fetch it).
 
-The name/phone notification is sent via an approved [Content Template](https://www.twilio.com/docs/content)
-(`contentSid` + `contentVariables`) rather than a freeform message, since
-WhatsApp requires business-initiated messages to use an approved template
-unless there's already an open 24-hour session with the destination number.
-The prescription file itself is then sent as a plain media message, which
-succeeds because the template message just opened/refreshed that session.
+The name/phone notification is sent via an approved HSM template (`isHSM`/`isTemplate`
+with the template text pre-filled) rather than a freeform message, since WhatsApp
+requires business-initiated messages to use an approved template unless there's
+already an open 24-hour session with the destination number. The prescription
+file itself is then sent as a plain media message, which succeeds because the
+template message just opened/refreshed that session.
 
 ## Project structure
 
@@ -44,7 +44,7 @@ zigly-BE/
 │   │   ├── upload.middleware.js          # Multer: JPG/PNG/PDF only, size limit
 │   │   └── errorHandler.js               # centralized error handling + cleanup
 │   ├── routes/prescription.routes.js
-│   ├── services/twilio.service.js        # Twilio WhatsApp API client
+│   ├── services/gupshup.service.js       # Gupshup WhatsApp API client
 │   ├── utils/
 │   │   ├── ApiError.js
 │   │   └── logger.js
@@ -66,8 +66,8 @@ zigly-BE/
 
 ### Prerequisites
 - Node.js 18+
-- A Twilio account with a WhatsApp sender configured (sandbox for testing, or a
-  production WhatsApp Business number) and an approved Content Template
+- A Gupshup Enterprise account with a WhatsApp sender configured and an
+  approved HSM template for the name/phone notification
 - A publicly reachable HTTPS domain for deployment (e.g. Render, Railway, Fly.io,
   an EC2/VPS behind nginx + Let's Encrypt, etc.)
 
@@ -85,11 +85,10 @@ Fill in `.env`:
 | `PORT` | Port to listen on (default 3000) |
 | `APP_BASE_URL` | Public HTTPS URL of this backend, e.g. `https://api.yourdomain.com` |
 | `ALLOWED_ORIGINS` | Comma-separated list of storefront origins allowed to call the API |
-| `TWILIO_ACCOUNT_SID` | From Twilio Console → Account Info |
-| `TWILIO_AUTH_TOKEN` | From Twilio Console → Account Info |
-| `TWILIO_WHATSAPP_FROM` | Your Twilio WhatsApp sender number, E.164 (e.g. `+14155238886`) |
-| `TWILIO_WHATSAPP_TO` | The number that should receive prescriptions, E.164 (e.g. `+919876543210`) |
-| `TWILIO_CONTENT_SID` | Approved Content Template SID (starts with `HX`) for the name/phone notification |
+| `GUPSHUP_USERID` | Your Gupshup Enterprise account userid (Console → Account Info) |
+| `GUPSHUP_PASSWORD` | Your Gupshup Enterprise account password |
+| `GUPSHUP_SEND_TO` | The number that should receive prescriptions, E.164 (e.g. `+919876543210`) |
+| `GUPSHUP_TEMPLATE_TEXT` | Approved HSM template text with `{{1}}`/`{{2}}` placeholders for the name/phone notification |
 | `UPLOAD_DIR` | Local folder for uploaded files (default `uploads`) |
 | `MAX_FILE_SIZE_MB` | Max upload size in MB (default 10) |
 
@@ -129,11 +128,11 @@ Error response:
   durable production setup, swap `multer.diskStorage` in
   [upload.middleware.js](src/middleware/upload.middleware.js) for
   `multer-s3` (or Cloudinary/GCS) and use the returned CDN URL in place of
-  `APP_BASE_URL/uploads/...` when calling Twilio — the rest of the flow is
+  `APP_BASE_URL/uploads/...` when calling Gupshup — the rest of the flow is
   unchanged.
-- **HTTPS required**: Twilio must be able to fetch the uploaded file over the
+- **HTTPS required**: Gupshup must be able to fetch the uploaded file over the
   public internet, so `APP_BASE_URL` cannot be `localhost` in production. Use
-  ngrok for local testing against real Twilio delivery.
+  ngrok for local testing against real Gupshup delivery.
 - **Rate limiting**: `express-rate-limit` is applied to the upload route
   (30 requests / 15 min / IP) — tune in
   [prescription.routes.js](src/routes/prescription.routes.js).
@@ -143,34 +142,27 @@ Error response:
   it (Dockerfile not included but the app has no native dependencies, so any
   standard `node:18-alpine` image works).
 
-## 2. Twilio setup
+## 2. Gupshup setup
 
-1. Sign up at [twilio.com](https://www.twilio.com) and note your
-   **Account SID** and **Auth Token** from the Console dashboard
-   (`TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`).
-2. Enable a WhatsApp sender:
-   - **Sandbox (testing)**: Console → Messaging → Try it out → Send a WhatsApp
-     message. Use the sandbox number (typically `+14155238886`) as
-     `TWILIO_WHATSAPP_FROM`.
-   - **Production**: register a WhatsApp Business sender under Console →
-     Messaging → Senders, which requires Meta Business verification.
-3. Set `TWILIO_WHATSAPP_TO` to the WhatsApp number that should receive
+1. Sign up for a [Gupshup](https://www.gupshup.io) Enterprise account and
+   note your **userid** and **password** from the Console dashboard
+   (`GUPSHUP_USERID` / `GUPSHUP_PASSWORD`). Authentication uses plain
+   userid/password — no separate API key is required.
+2. Get a WhatsApp Business sender number configured on your Gupshup account
+   (Gupshup's support team coordinates the Meta/WABA registration).
+3. Set `GUPSHUP_SEND_TO` to the WhatsApp number that should receive
    prescription uploads (e.g. the pharmacist's phone), in E.164 format
    (e.g. `+919876543210`).
-   - **Sandbox**: that number must first join the sandbox by sending the
-     sandbox's join keyword (e.g. `join <code>`) to the sandbox number from
-     WhatsApp. This must be repeated periodically, as sandbox sessions expire.
-   - **Production**: no opt-in step is needed for messages sent via an
-     approved template.
-4. Create an approved **Content Template** (Console → Messaging → Content
-   Template Builder) with two variables for the notification text, e.g.:
+4. Get an approved **HSM template** created (Gupshup's support team can create
+   it on your behalf via Unify or the Template Creation API) with two
+   variables for the notification text, e.g.:
    ```
    New prescription received from {{1}}, phone {{2}}.
    ```
-   Copy its SID (starts with `HX`) into `TWILIO_CONTENT_SID`. Templates need
-   WhatsApp approval before use in production (usually within minutes to a
-   few hours); pre-approved sample templates are available in the sandbox for
-   immediate testing.
+   Set the same text, placeholders included, as `GUPSHUP_TEMPLATE_TEXT` —
+   [gupshup.service.js](src/services/gupshup.service.js) resolves `{{1}}`/`{{2}}`
+   with the customer's name/phone before sending. Templates need WhatsApp
+   approval before use (usually within minutes to a few hours).
 5. [prescription.controller.js](src/controllers/prescription.controller.js)
    maps `contentVariables` as `{ 1: name, 2: phone }` — update the key numbers
    there if your template's placeholders are in a different order.
@@ -255,10 +247,8 @@ identical to the quick path above, just installable/updatable as an app.
    `ngrok http 3000`, then set `APP_BASE_URL` to the ngrok HTTPS URL.
 2. Add the theme section to a Shopify page (or a dev store) and point
    **Backend upload endpoint URL** at `<ngrok-url>/api/prescription/upload`.
-3. If using the sandbox, make sure `TWILIO_WHATSAPP_TO` has recently joined it
-   (see Twilio setup step 3) or the media message will fail with a closed-session error.
-4. Submit the form with a test name, phone, and a JPG/PNG/PDF file.
-5. Confirm the destination WhatsApp number receives the Content Template
+3. Submit the form with a test name, phone, and a JPG/PNG/PDF file.
+4. Confirm the destination WhatsApp number receives the HSM template
    notification (name/phone), followed by the prescription image/document.
-6. Check backend logs for `Prescription forwarded to WhatsApp` to confirm
+5. Check backend logs for `Prescription forwarded to WhatsApp` to confirm
    success; error responses surface in the storefront form's status message.

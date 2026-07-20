@@ -17,15 +17,14 @@ const config = {
     .map((origin) => origin.trim())
     .filter(Boolean),
 
-  twilio: {
-    accountSid: process.env.TWILIO_ACCOUNT_SID,
-    authToken: process.env.TWILIO_AUTH_TOKEN,
-    // E.164, no "whatsapp:" prefix and no "+"-less shorthand — e.g. +14155238886
-    whatsappFrom: process.env.TWILIO_WHATSAPP_FROM,
+  gupshup: {
+    userId: process.env.GUPSHUP_USERID,
+    password: process.env.GUPSHUP_PASSWORD,
     // The predefined destination (pharmacist/store) WhatsApp number, E.164, e.g. +919540317803
-    whatsappTo: process.env.TWILIO_WHATSAPP_TO,
-    // Approved Content Template SID (starts with "HX") used for the name/phone notification
-    contentSid: process.env.TWILIO_CONTENT_SID,
+    sendTo: process.env.GUPSHUP_SEND_TO,
+    // Approved HSM template text with {{1}}/{{2}} placeholders, e.g.
+    // "New prescription received from {{1}}, phone {{2}}."
+    templateText: process.env.GUPSHUP_TEMPLATE_TEXT,
   },
 
   uploadDir: process.env.UPLOAD_DIR || 'uploads',
@@ -34,11 +33,10 @@ const config = {
 
 function validateConfig() {
   const requiredVars = [
-    'TWILIO_ACCOUNT_SID',
-    'TWILIO_AUTH_TOKEN',
-    'TWILIO_WHATSAPP_FROM',
-    'TWILIO_WHATSAPP_TO',
-    'TWILIO_CONTENT_SID',
+    'GUPSHUP_USERID',
+    'GUPSHUP_PASSWORD',
+    'GUPSHUP_SEND_TO',
+    'GUPSHUP_TEMPLATE_TEXT',
   ];
   const missing = requiredVars.filter((name) => !process.env[name]);
   if (missing.length) {
