@@ -30,19 +30,25 @@ async function uploadPrescription(req, res, next) {
     // Notification text goes through the approved HSM template so it's
     // delivered even without an already-open WhatsApp session. Adjust the "1"/"2"
     // keys below to match your actual template's placeholder order.
-    await gupshupService.sendTemplateMessage({
+    const templateResult = await gupshupService.sendTemplateMessage({
       contentVariables: { 1: name, 2: phone },
     });
 
     // The template message above opens/refreshes the session, so the file can
     // follow as a plain media message.
-    await gupshupService.sendMediaMessage({
+    const mediaResult = await gupshupService.sendMediaMessage({
       mediaUrl: publicFileUrl,
       body: `Prescription from ${name} (${phone})`,
       fileExtension: path.extname(file.filename),
     });
 
-    logger.info('Prescription forwarded to WhatsApp', { name, phone, file: file.filename });
+    logger.info('Prescription forwarded to WhatsApp', {
+      name,
+      phone,
+      file: file.filename,
+      templateResult,
+      mediaResult,
+    });
 
     res.status(200).json({
       success: true,
