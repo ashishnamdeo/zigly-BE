@@ -27,7 +27,7 @@ async function uploadPrescription(req, res, next) {
 
     const publicFileUrl = `${config.appBaseUrl}/uploads/${file.filename}`;
 
-    // Notification text goes through the approved Content Template so it's
+    // Notification text goes through the approved HSM template so it's
     // delivered even without an already-open WhatsApp session. Adjust the "1"/"2"
     // keys below to match your actual template's placeholder order.
     await gupshupService.sendTemplateMessage({

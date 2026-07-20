@@ -18,13 +18,15 @@ const config = {
     .filter(Boolean),
 
   gupshup: {
-    userId: process.env.GUPSHUP_USERID,
-    password: process.env.GUPSHUP_PASSWORD,
+    apiKey: process.env.GUPSHUP_API_KEY,
+    // The WhatsApp Business number this app sends FROM, E.164, e.g. +917026392424
+    source: process.env.GUPSHUP_SOURCE,
     // The predefined destination (pharmacist/store) WhatsApp number, E.164, e.g. +919540317803
     sendTo: process.env.GUPSHUP_SEND_TO,
-    // Approved HSM template text with {{1}}/{{2}} placeholders, e.g.
-    // "New prescription received from {{1}}, phone {{2}}."
-    templateText: process.env.GUPSHUP_TEMPLATE_TEXT,
+    // Approved HSM template ID from Gupshup Console > Templates
+    templateId: process.env.GUPSHUP_TEMPLATE_ID,
+    // App name registered on Gupshup, required by the API as "src.name"
+    appName: process.env.GUPSHUP_APP_NAME,
   },
 
   uploadDir: process.env.UPLOAD_DIR || 'uploads',
@@ -33,10 +35,11 @@ const config = {
 
 function validateConfig() {
   const requiredVars = [
-    'GUPSHUP_USERID',
-    'GUPSHUP_PASSWORD',
+    'GUPSHUP_API_KEY',
+    'GUPSHUP_SOURCE',
     'GUPSHUP_SEND_TO',
-    'GUPSHUP_TEMPLATE_TEXT',
+    'GUPSHUP_TEMPLATE_ID',
+    'GUPSHUP_APP_NAME',
   ];
   const missing = requiredVars.filter((name) => !process.env[name]);
   if (missing.length) {
