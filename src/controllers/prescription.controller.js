@@ -1,9 +1,13 @@
-const { config } = require('../config/env');
+const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const gupshupService = require('../services/gupshup.service');
+const shopifyService = require('../services/shopify.service');
+const { ALLOWED_MIME_TYPES } = require('../middleware/upload.middleware');
 
 const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
+const DOCUMENT_MIME_TYPES = new Set(['application/pdf']);
 
 function validateInput({ name, phone }, file) {
   if (!name || !name.trim()) {
@@ -17,37 +21,67 @@ function validateInput({ name, phone }, file) {
   }
 }
 
+function parseProducts(rawProducts) {
+  if (!rawProducts) return [];
+  try {
+    const parsed = JSON.parse(rawProducts);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function summarizeProducts(products) {
+  return products
+    .map((product) => {
+      const title = product.title || 'Item';
+      return product.quantity > 1 ? `${title} (x${product.quantity})` : title;
+    })
+    .join(', ');
+}
+
 async function uploadPrescription(req, res, next) {
   const { name, phone } = req.body;
   const file = req.file;
 
   try {
     validateInput({ name, phone }, file);
+    const products = parseProducts(req.body.products);
 
-    const publicFileUrl = `${config.appBaseUrl}/uploads/${file.filename}`;
+    const isDocument = DOCUMENT_MIME_TYPES.has(file.mimetype);
+    const filename = `${uuidv4()}${ALLOWED_MIME_TYPES[file.mimetype] || path.extname(file.originalname)}`;
+    const publicFileUrl = await shopifyService.uploadPrescriptionFile({
+      buffer: file.buffer,
+      filename,
+      mimeType: file.mimetype,
+      isDocument,
+    });
 
     // The approved template has an image header, so the prescription photo
-    // and the name/phone notification text go out together in a single
-    // template send. Adjust the "1"/"2" keys below to match your actual
-    // template's placeholder order.
+    // and the name/phone/products notification text go out together in a
+    // single template send. Adjust the "1"/"2"/"3" keys below to match your
+    // actual template's placeholder order.
     // NOTE: for PDF uploads this still sends the PDF as the header "image",
     // which WhatsApp will likely reject — PDFs need a real fallback header
     // image or a separate document-message flow, still to be resolved.
     const templateResult = await gupshupService.sendTemplateMessage({
-      contentVariables: { 1: name, 2: phone },
+      contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
       headerImageUrl: publicFileUrl,
     });
 
     logger.info('Prescription forwarded to WhatsApp', {
       name,
       phone,
-      file: file.filename,
+      products,
+      file: filename,
+      shopifyUrl: publicFileUrl,
       templateResult,
     });
 
     res.status(200).json({
       success: true,
       message: 'Prescription uploaded and sent via WhatsApp successfully',
+      imageUrl: publicFileUrl,
     });
   } catch (err) {
     next(err);

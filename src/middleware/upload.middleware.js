@@ -1,6 +1,4 @@
 const multer = require('multer');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
 const { config } = require('../config/env');
 const ApiError = require('../utils/ApiError');
 
@@ -10,15 +8,9 @@ const ALLOWED_MIME_TYPES = {
   'application/pdf': '.pdf',
 };
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(process.cwd(), config.uploadDir));
-  },
-  filename: (req, file, cb) => {
-    const ext = ALLOWED_MIME_TYPES[file.mimetype] || path.extname(file.originalname);
-    cb(null, `${uuidv4()}${ext}`);
-  },
-});
+// Files are forwarded to Shopify's CDN (see shopify.service.js) rather than
+// saved locally — local disk doesn't persist or serve publicly on Lambda.
+const storage = multer.memoryStorage();
 
 function fileFilter(req, file, cb) {
   if (!ALLOWED_MIME_TYPES[file.mimetype]) {

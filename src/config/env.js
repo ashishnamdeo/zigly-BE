@@ -11,7 +11,6 @@ function required(name) {
 const config = {
   port: Number(process.env.PORT) || 3000,
   nodeEnv: process.env.NODE_ENV || 'development',
-  appBaseUrl: process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 3000}`,
   allowedOrigins: (process.env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
@@ -29,8 +28,13 @@ const config = {
     appName: process.env.GUPSHUP_APP_NAME,
   },
 
-  uploadDir: process.env.UPLOAD_DIR || 'uploads',
   maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB) || 10,
+
+  shopify: {
+    storeDomain: process.env.SHOPIFY_STORE_DOMAIN,
+    adminToken: process.env.SHOPIFY_ADMIN_TOKEN,
+    apiVersion: process.env.SHOPIFY_API_VERSION || '2025-01',
+  },
 };
 
 function validateConfig() {
@@ -40,6 +44,8 @@ function validateConfig() {
     'GUPSHUP_SEND_TO',
     'GUPSHUP_TEMPLATE_ID',
     'GUPSHUP_APP_NAME',
+    'SHOPIFY_STORE_DOMAIN',
+    'SHOPIFY_ADMIN_TOKEN',
   ];
   const missing = requiredVars.filter((name) => !process.env[name]);
   if (missing.length) {

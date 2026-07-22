@@ -1,6 +1,3 @@
-const fs = require('fs');
-const path = require('path');
-
 const { config, validateConfig } = require('./config/env');
 const logger = require('./utils/logger');
 
@@ -9,11 +6,6 @@ try {
 } catch (err) {
   logger.error(err.message);
   process.exit(1);
-}
-
-const uploadPath = path.join(process.cwd(), config.uploadDir);
-if (!fs.existsSync(uploadPath)) {
-  fs.mkdirSync(uploadPath, { recursive: true });
 }
 
 const app = require('./app');
