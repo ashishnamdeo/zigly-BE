@@ -6,7 +6,7 @@ const morgan = require('morgan');
 const { config } = require('./config/env');
 const prescriptionRoutes = require('./routes/prescription.routes');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
-const logger = require('./utils/logger');
+const gupshupWebhookController = require('./controllers/gupshupWebhook.controller');
 
 const app = express();
 
@@ -27,12 +27,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.get('/health', (req, res) => res.status(200).json({ success: true, status: 'ok' }));
 
-// Temporary diagnostic endpoint: logs whatever Gupshup's webhook sends so
-// delivery/failure events can be inspected via Railway's deploy logs.
-app.post('/api/gupshup/webhook-debug', (req, res) => {
-  logger.info('Gupshup webhook payload received', { body: req.body });
-  res.status(200).json({ success: true });
-});
+app.post('/api/gupshup/webhook', gupshupWebhookController.handleWebhook);
 
 app.use('/api/prescription', prescriptionRoutes);
 

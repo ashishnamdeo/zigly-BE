@@ -30,10 +30,17 @@ const config = {
 
   maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB) || 10,
 
-  shopify: {
-    storeDomain: process.env.SHOPIFY_STORE_DOMAIN,
-    adminToken: process.env.SHOPIFY_ADMIN_TOKEN,
-    apiVersion: process.env.SHOPIFY_API_VERSION || '2025-01',
+  s3: {
+    bucket: process.env.S3_BUCKET_NAME,
+    region: process.env.S3_REGION || process.env.AWS_REGION || 'ap-south-1',
+  },
+
+  db: {
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT) || 5432,
+    database: process.env.DB_NAME || 'postgres',
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
   },
 };
 

@@ -3,11 +3,11 @@ const path = require('path');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const gupshupService = require('../services/gupshup.service');
-const shopifyService = require('../services/shopify.service');
+const s3Service = require('../services/s3.service');
 const { ALLOWED_MIME_TYPES } = require('../middleware/upload.middleware');
+const { createPrescriptionRequest } = require('../repositories/prescriptionRequest.repository');
 
 const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
-const DOCUMENT_MIME_TYPES = new Set(['application/pdf']);
 
 function validateInput({ name, phone }, file) {
   if (!name || !name.trim()) {
@@ -48,13 +48,11 @@ async function uploadPrescription(req, res, next) {
     validateInput({ name, phone }, file);
     const products = parseProducts(req.body.products);
 
-    const isDocument = DOCUMENT_MIME_TYPES.has(file.mimetype);
     const filename = `${uuidv4()}${ALLOWED_MIME_TYPES[file.mimetype] || path.extname(file.originalname)}`;
-    const publicFileUrl = await shopifyService.uploadPrescriptionFile({
+    const publicFileUrl = await s3Service.uploadPrescriptionFile({
       buffer: file.buffer,
       filename,
       mimeType: file.mimetype,
-      isDocument,
     });
 
     // The approved template has an image header, so the prescription photo
@@ -74,9 +72,25 @@ async function uploadPrescription(req, res, next) {
       phone,
       products,
       file: filename,
-      shopifyUrl: publicFileUrl,
+      fileUrl: publicFileUrl,
       templateResult,
     });
+
+    try {
+      await createPrescriptionRequest({
+        gupshupMessageId: templateResult.messageId,
+        customerName: name,
+        customerPhone: phone,
+        method: 'upload',
+        fileUrl: publicFileUrl,
+        products,
+      });
+    } catch (dbErr) {
+      // The WhatsApp message already went out — don't fail the request over
+      // a DB write, but this does mean the Approve/Reject webhook won't be
+      // able to match this request back later.
+      logger.error('Failed to persist prescription request', { error: dbErr.message });
+    }
 
     res.status(200).json({
       success: true,
