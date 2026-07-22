@@ -1,7 +1,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { upload } = require('../middleware/upload.middleware');
-const { uploadPrescription } = require('../controllers/prescription.controller');
+const { uploadPrescription, requestConsultation } = require('../controllers/prescription.controller');
 
 const router = express.Router();
 
@@ -14,5 +14,6 @@ const uploadLimiter = rateLimit({
 });
 
 router.post('/upload', uploadLimiter, upload.single('prescription'), uploadPrescription);
+router.post('/consult', uploadLimiter, requestConsultation);
 
 module.exports = router;

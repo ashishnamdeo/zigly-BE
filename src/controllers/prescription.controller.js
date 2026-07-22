@@ -9,6 +9,10 @@ const { createPrescriptionRequest } = require('../repositories/prescriptionReque
 
 const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
 
+// Generic banner used as the required template image header for consult
+// requests, which have no prescription file to attach.
+const CONSULT_HEADER_IMAGE_URL = 'https://zigly.com/cdn/shop/files/1920X360_vetfirst_banner.png?v=1776228816&width=2000';
+
 function validateInput({ name, phone }, file) {
   if (!name || !name.trim()) {
     throw new ApiError(400, 'Customer name is required');
@@ -18,6 +22,15 @@ function validateInput({ name, phone }, file) {
   }
   if (!file) {
     throw new ApiError(400, 'A prescription file (JPG, PNG, or PDF) is required');
+  }
+}
+
+function validateConsultInput({ name, phone }) {
+  if (!name || !name.trim()) {
+    throw new ApiError(400, 'Customer name is required');
+  }
+  if (!phone || !PHONE_REGEX.test(phone.trim())) {
+    throw new ApiError(400, 'A valid phone number (8-15 digits, optional leading +) is required');
   }
 }
 
@@ -102,4 +115,45 @@ async function uploadPrescription(req, res, next) {
   }
 }
 
-module.exports = { uploadPrescription };
+async function requestConsultation(req, res, next) {
+  const { name, phone } = req.body;
+
+  try {
+    validateConsultInput({ name, phone });
+    const products = parseProducts(req.body.products);
+
+    const templateResult = await gupshupService.sendTemplateMessage({
+      contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
+      headerImageUrl: CONSULT_HEADER_IMAGE_URL,
+    });
+
+    logger.info('Consultation request forwarded to WhatsApp', {
+      name,
+      phone,
+      products,
+      templateResult,
+    });
+
+    try {
+      await createPrescriptionRequest({
+        gupshupMessageId: templateResult.messageId,
+        customerName: name,
+        customerPhone: phone,
+        method: 'consult',
+        fileUrl: null,
+        products,
+      });
+    } catch (dbErr) {
+      logger.error('Failed to persist consultation request', { error: dbErr.message });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Consultation request sent via WhatsApp successfully',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { uploadPrescription, requestConsultation };
