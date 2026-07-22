@@ -44,8 +44,6 @@ function validateConfig() {
     'GUPSHUP_SEND_TO',
     'GUPSHUP_TEMPLATE_ID',
     'GUPSHUP_APP_NAME',
-    'SHOPIFY_STORE_DOMAIN',
-    'SHOPIFY_ADMIN_TOKEN',
   ];
   const missing = requiredVars.filter((name) => !process.env[name]);
   if (missing.length) {
