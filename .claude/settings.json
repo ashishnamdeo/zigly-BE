@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "PowerShell(Invoke-WebRequest -Uri \"https://zigly-be-production-21a9.up.railway.app/health\" -UseBasicParsing -TimeoutSec 20)",
+      "PowerShell(railway domain status 01470363-11a9-4e3d-9349-8e44a0a56543 2>&1)"
     ]
   }
 }

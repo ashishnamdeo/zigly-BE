@@ -9,11 +9,11 @@ function toApiNumber(e164Number) {
   return e164Number.replace(/^\+/, '');
 }
 
-async function postToGupshup(path, params) {
+async function postToGupshup(path, params, { destination } = {}) {
   const body = new URLSearchParams({
     channel: 'whatsapp',
     source: toApiNumber(config.gupshup.source),
-    destination: toApiNumber(config.gupshup.sendTo),
+    destination: toApiNumber(destination || config.gupshup.sendTo),
     'src.name': config.gupshup.appName,
     ...params,
   });
@@ -42,7 +42,7 @@ async function postToGupshup(path, params) {
  * be supplied via a separate "message" field alongside "template" — putting
  * the image URL inside template.params returns a (#2012) format-mismatch error.
  */
-async function sendTemplateMessage({ contentVariables, headerImageUrl }) {
+async function sendTemplateMessage({ contentVariables, headerImageUrl, destination }) {
   try {
     const params = Object.keys(contentVariables)
       .sort((a, b) => Number(a) - Number(b))
@@ -55,13 +55,40 @@ async function sendTemplateMessage({ contentVariables, headerImageUrl }) {
       payload.message = JSON.stringify({ type: 'image', image: { link: headerImageUrl } });
     }
 
-    return await postToGupshup('/template/msg', payload);
+    return await postToGupshup('/template/msg', payload, { destination });
   } catch (err) {
     logger.error('Gupshup template message failed', { error: err.message });
     throw new ApiError(502, 'Failed to send WhatsApp template message via Gupshup', {
       message: err.message,
     });
   }
+}
+
+/**
+ * Sends the prescription template to the primary doctor number, and also to
+ * the secondary/tertiary ones (whichever are configured) so all are notified
+ * at the same time. Backup sends are best-effort: if one fails, the others
+ * still have the request, so this logs and continues rather than failing the
+ * whole request over a backup number.
+ */
+async function sendTemplateMessageToDoctors({ contentVariables, headerImageUrl }) {
+  const primaryResult = await sendTemplateMessage({ contentVariables, headerImageUrl });
+
+  const sendToBackupDoctor = async (destination) => {
+    if (!destination) return null;
+    try {
+      const result = await sendTemplateMessage({ contentVariables, headerImageUrl, destination });
+      return result.messageId;
+    } catch (err) {
+      logger.error('Failed to send prescription template to backup doctor number', { destination, error: err.message });
+      return null;
+    }
+  };
+
+  const secondaryMessageId = await sendToBackupDoctor(config.gupshup.sendToSecondary);
+  const tertiaryMessageId = await sendToBackupDoctor(config.gupshup.sendToTertiary);
+
+  return { primaryMessageId: primaryResult.messageId, secondaryMessageId, tertiaryMessageId };
 }
 
 /**
@@ -85,4 +112,34 @@ async function sendMediaMessage({ mediaUrl, body, fileExtension }) {
   }
 }
 
-module.exports = { sendTemplateMessage, sendMediaMessage };
+/**
+ * Notifies the customer of an approve/reject decision via the approved
+ * prescription_status_update template, so delivery doesn't depend on an
+ * open 24h WhatsApp session with that number the way a plain text message
+ * would.
+ */
+async function sendStatusTemplateMessage({ to, contentVariables, templateId }) {
+  try {
+    const params = Object.keys(contentVariables)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((key) => contentVariables[key]);
+
+    const payload = {
+      template: JSON.stringify({ id: templateId || config.gupshup.statusTemplateId, params }),
+    };
+
+    return await postToGupshup('/template/msg', payload, { destination: to });
+  } catch (err) {
+    logger.error('Gupshup status template message failed', { error: err.message, to });
+    throw new ApiError(502, 'Failed to send WhatsApp status update to customer', {
+      message: err.message,
+    });
+  }
+}
+
+module.exports = {
+  sendTemplateMessage,
+  sendTemplateMessageToDoctors,
+  sendMediaMessage,
+  sendStatusTemplateMessage,
+};

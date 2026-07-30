@@ -7,6 +7,7 @@ const { config } = require('./config/env');
 const prescriptionRoutes = require('./routes/prescription.routes');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const gupshupWebhookController = require('./controllers/gupshupWebhook.controller');
+const shopifyWebhookController = require('./controllers/shopifyWebhook.controller');
 
 const app = express();
 
@@ -22,12 +23,22 @@ app.use(
   }),
 );
 app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
-app.use(express.json());
+// The `verify` callback stashes the exact raw bytes Shopify signed, since
+// verifying its HMAC signature against a re-serialized JSON.stringify(body)
+// can fail on byte-for-byte differences (key order, whitespace, etc.).
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/health', (req, res) => res.status(200).json({ success: true, status: 'ok' }));
 
 app.post('/api/gupshup/webhook', gupshupWebhookController.handleWebhook);
+app.post('/webhooks/orders-create', shopifyWebhookController.handleOrderCreate);
 
 app.use('/api/prescription', prescriptionRoutes);
 

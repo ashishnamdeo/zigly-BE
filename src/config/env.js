@@ -22,11 +22,41 @@ const config = {
     source: process.env.GUPSHUP_SOURCE,
     // The predefined destination (pharmacist/store) WhatsApp number, E.164, e.g. +919540317803
     sendTo: process.env.GUPSHUP_SEND_TO,
+    // Secondary doctor WhatsApp number. Sent the same prescription template
+    // at the same time as the primary number — whichever doctor responds
+    // first, the other gets a status notification instead of acting on a
+    // stale request. Optional — if unset, only the primary doctor is
+    // notified and there's no cross-notify.
+    sendToSecondary: process.env.GUPSHUP_SEND_TO_SECONDARY,
+    // Tertiary doctor WhatsApp number, notified at the same time as the
+    // other two. Optional — if unset, only primary (+ secondary, if set)
+    // are notified.
+    sendToTertiary: process.env.GUPSHUP_SEND_TO_TERTIARY,
     // Approved HSM template ID from Gupshup Console > Templates
     templateId: process.env.GUPSHUP_TEMPLATE_ID,
+    // Approved HSM template ID for notifying the customer of an approve/reject decision
+    statusTemplateId: process.env.GUPSHUP_STATUS_TEMPLATE_ID,
+    // Approved HSM template ID for notifying the OTHER doctor (not the one
+    // who responded) that a request was already handled — takes {1: customer
+    // name, 2: responding doctor's name, 3: Approved/Rejected}. Optional:
+    // until this is approved and set, the other-doctor notify falls back to
+    // reusing statusTemplateId with the product list instead of a doctor name.
+    doctorStatusTemplateId: process.env.GUPSHUP_DOCTOR_STATUS_TEMPLATE_ID,
+    // Display names for the primary/secondary/tertiary doctor numbers above,
+    // used to fill the doctor-status template's "responding doctor's name"
+    // variable.
+    primaryDoctorName: process.env.GUPSHUP_PRIMARY_DOCTOR_NAME,
+    secondaryDoctorName: process.env.GUPSHUP_SECONDARY_DOCTOR_NAME,
+    tertiaryDoctorName: process.env.GUPSHUP_TERTIARY_DOCTOR_NAME,
     // App name registered on Gupshup, required by the API as "src.name"
     appName: process.env.GUPSHUP_APP_NAME,
   },
+
+  // HMAC secret shown when the orders/create webhook is registered (Shopify
+  // Admin > Settings > Notifications > Webhooks, or a custom app's client
+  // secret if registered via the Admin API) — used to verify incoming
+  // webhook requests actually came from Shopify.
+  shopifyWebhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET,
 
   maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB) || 10,
 
@@ -50,6 +80,7 @@ function validateConfig() {
     'GUPSHUP_SOURCE',
     'GUPSHUP_SEND_TO',
     'GUPSHUP_TEMPLATE_ID',
+    'GUPSHUP_STATUS_TEMPLATE_ID',
     'GUPSHUP_APP_NAME',
   ];
   const missing = requiredVars.filter((name) => !process.env[name]);
