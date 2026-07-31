@@ -58,6 +58,20 @@ const config = {
   // webhook requests actually came from Shopify.
   shopifyWebhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET,
 
+  shopify: {
+    // your-store.myshopify.com — used to call back into the Admin API.
+    shopDomain: process.env.SHOPIFY_SHOP_DOMAIN,
+    // Custom app Admin API access token with write_orders scope (Admin >
+    // Settings > Apps and sales channels > Develop apps).
+    adminApiToken: process.env.SHOPIFY_ADMIN_API_TOKEN,
+    apiVersion: process.env.SHOPIFY_API_VERSION || '2026-01',
+    // Namespace/key for the order metafield that flags whether the order
+    // contains an Rx product. Defaults match a no-code "custom data"
+    // definition created in Admin > Settings > Custom data > Orders.
+    rxMetafieldNamespace: process.env.SHOPIFY_RX_METAFIELD_NAMESPACE || 'custom',
+    rxMetafieldKey: process.env.SHOPIFY_RX_METAFIELD_KEY || 'rx-prescription-order',
+  },
+
   maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB) || 10,
 
   s3: {

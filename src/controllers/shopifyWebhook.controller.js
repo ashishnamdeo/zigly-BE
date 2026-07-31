@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { config } = require('../config/env');
 const logger = require('../utils/logger');
 const gupshupService = require('../services/gupshup.service');
+const shopifyService = require('../services/shopify.service');
 const { createPrescriptionRequest, existsByShopifyOrderId } = require('../repositories/prescriptionRequest.repository');
 const { consumePendingUpload } = require('../repositories/pendingPrescriptionUpload.repository');
 
@@ -74,11 +75,21 @@ async function handleOrderCreate(req, res) {
   try {
     const order = req.body;
     const prescriptionItems = findPrescriptionLineItems(order.line_items);
+    const shopifyOrderId = order.name || String(order.id);
+
+    // Runs for every order (not just Rx ones) so the flag is always accurate,
+    // regardless of the early-returns below for non-Rx / duplicate orders.
+    try {
+      const orderGid = order.admin_graphql_api_id || `gid://shopify/Order/${order.id}`;
+      await shopifyService.setRxProductOrderMetafield(orderGid, prescriptionItems.length > 0);
+    } catch (err) {
+      logger.error('Failed to set rx-prescription-order metafield', { error: err.message, shopifyOrderId });
+    }
+
     if (!prescriptionItems.length) {
       return res.status(200).json({ success: true });
     }
 
-    const shopifyOrderId = order.name || String(order.id);
     if (await existsByShopifyOrderId(shopifyOrderId)) {
       logger.info('Skipping duplicate orders/create webhook delivery', { shopifyOrderId });
       return res.status(200).json({ success: true });
