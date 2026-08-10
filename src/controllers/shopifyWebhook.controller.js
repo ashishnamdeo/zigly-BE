@@ -26,7 +26,16 @@ function verifySignature(rawBody, hmacHeader) {
 function findPrescriptionLineItems(lineItems) {
   return (lineItems || [])
     .filter((item) => (item.properties || []).some((p) => p.name === '_requires_prescription' && p.value === 'true'))
-    .map((item) => ({ product_id: item.product_id, title: item.title, quantity: item.quantity }));
+    .map((item) => ({
+      product_id: item.product_id,
+      title: item.title,
+      quantity: item.quantity,
+      // Captured (not yet consumed anywhere) so a later Approve/Reject action
+      // can identify this exact line item on the order without a lookup —
+      // CalculatedLineItem has no back-reference to the original LineItem id,
+      // so variant_id is what the Order Edit API match will key off instead.
+      variant_id: item.variant_id,
+    }));
 }
 
 function resolveCustomer(order) {
@@ -46,6 +55,20 @@ function resolveCustomer(order) {
 function findUploadKey(order) {
   const match = (order.note_attributes || []).find((a) => a.name === 'prescription_upload_key');
   return match ? match.value : null;
+}
+
+function findLandingPageUrl(order) {
+  const match = (order.note_attributes || []).find((a) => a.name === 'landing_page_url');
+  return match ? match.value : '';
+}
+
+// While this feature is still being tested, only process orders that came
+// from theme-preview traffic — never real zigly.com customers. Controlled by
+// config.shopify.orderOriginAllowlist (see env.js); an empty allowlist means
+// "process every order" for once this is ready to go live.
+function isAllowedOrderOrigin(order) {
+  if (!config.shopify.orderOriginAllowlist) return true;
+  return findLandingPageUrl(order).includes(config.shopify.orderOriginAllowlist);
 }
 
 function summarizeProducts(products) {
@@ -74,16 +97,36 @@ async function handleOrderCreate(req, res) {
   // well inside Shopify's webhook timeout, so there's no need to ack early.
   try {
     const order = req.body;
-    const prescriptionItems = findPrescriptionLineItems(order.line_items);
     const shopifyOrderId = order.name || String(order.id);
+
+    if (!isAllowedOrderOrigin(order)) {
+      logger.info('Skipping orders/create webhook: order origin not in the test allowlist', {
+        shopifyOrderId,
+        landingPageUrl: findLandingPageUrl(order),
+      });
+      return res.status(200).json({ success: true });
+    }
+
+    const prescriptionItems = findPrescriptionLineItems(order.line_items);
+    const orderGid = order.admin_graphql_api_id || `gid://shopify/Order/${order.id}`;
 
     // Runs for every order (not just Rx ones) so the flag is always accurate,
     // regardless of the early-returns below for non-Rx / duplicate orders.
     try {
-      const orderGid = order.admin_graphql_api_id || `gid://shopify/Order/${order.id}`;
       await shopifyService.setRxProductOrderMetafield(orderGid, prescriptionItems.length > 0);
     } catch (err) {
-      logger.error('Failed to set rx-prescription-order metafield', { error: err.message, shopifyOrderId });
+      logger.error('Failed to set rx_prescription_order metafield', { error: err.message, shopifyOrderId });
+    }
+
+    // The tag (not the metafield above) is what the Unicommerce connector
+    // actually watches to hold the order — only added when there's an Rx
+    // item, since tags are naturally absent otherwise (no "false" case).
+    if (prescriptionItems.length) {
+      try {
+        await shopifyService.addOrderTag(orderGid, config.shopify.rxTagName);
+      } catch (err) {
+        logger.error('Failed to add rx_prescription_order tag', { error: err.message, shopifyOrderId });
+      }
     }
 
     if (!prescriptionItems.length) {
@@ -119,7 +162,7 @@ async function handleOrderCreate(req, res) {
       }
     }
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
+    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
       contentVariables: { 1: name, 2: phone, 3: summarizeProducts(prescriptionItems) },
       headerImageUrl,
     });
@@ -140,12 +183,14 @@ async function handleOrderCreate(req, res) {
         gupshupMessageId: primaryMessageId,
         secondaryGupshupMessageId: secondaryMessageId,
         tertiaryGupshupMessageId: tertiaryMessageId,
+        quaternaryGupshupMessageId: quaternaryMessageId,
         customerName: name,
         customerPhone: phone,
         method,
         fileUrl,
         products: prescriptionItems,
         shopifyOrderId,
+        shopifyOrderGid: orderGid,
       });
     } catch (dbErr) {
       logger.error('Failed to persist prescription request from webhook', { error: dbErr.message, shopifyOrderId });

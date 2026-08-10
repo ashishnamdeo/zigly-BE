@@ -6,6 +6,7 @@ jest.mock('../../src/config/env', () => ({
       sendTo: '+912222222222',
       sendToSecondary: '+913333333333',
       sendToTertiary: '+914444444444',
+      sendToQuaternary: '+916666666666',
       templateId: 'template-id',
       statusTemplateId: 'status-template-id',
       doctorStatusTemplateId: 'doctor-status-template-id',
@@ -103,33 +104,36 @@ describe('sendTemplateMessage (via sendTemplateMessageToDoctors primary send)', 
 });
 
 describe('sendTemplateMessageToDoctors', () => {
-  it('sends to primary, secondary, and tertiary numbers when all are configured', async () => {
+  it('sends to primary, secondary, tertiary, and quaternary numbers when all are configured', async () => {
     global.fetch
       .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'primary-id' }))
       .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'secondary-id' }))
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'tertiary-id' }));
+      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'tertiary-id' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'quaternary-id' }));
 
     const result = await gupshupService.sendTemplateMessageToDoctors({
       contentVariables: { 1: 'Jane', 2: '+91999', 3: 'Amoxicillin' },
       headerImageUrl: 'https://example.com/rx.png',
     });
 
-    expect(global.fetch).toHaveBeenCalledTimes(3);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
     expect(result).toEqual({
       primaryMessageId: 'primary-id',
       secondaryMessageId: 'secondary-id',
       tertiaryMessageId: 'tertiary-id',
+      quaternaryMessageId: 'quaternary-id',
     });
 
     const destinations = global.fetch.mock.calls.map(
       ([, options]) => new URLSearchParams(options.body).get('destination'),
     );
-    expect(destinations).toEqual(['912222222222', '913333333333', '914444444444']);
+    expect(destinations).toEqual(['912222222222', '913333333333', '914444444444', '916666666666']);
   });
 
   it('skips backup doctors that are not configured', async () => {
     config.gupshup.sendToSecondary = undefined;
     config.gupshup.sendToTertiary = undefined;
+    config.gupshup.sendToQuaternary = undefined;
 
     global.fetch.mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'primary-id' }));
 
@@ -142,17 +146,20 @@ describe('sendTemplateMessageToDoctors', () => {
       primaryMessageId: 'primary-id',
       secondaryMessageId: null,
       tertiaryMessageId: null,
+      quaternaryMessageId: null,
     });
 
     config.gupshup.sendToSecondary = '+913333333333';
     config.gupshup.sendToTertiary = '+914444444444';
+    config.gupshup.sendToQuaternary = '+916666666666';
   });
 
   it('still returns the primary result when a backup doctor send fails', async () => {
     global.fetch
       .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'primary-id' }))
       .mockResolvedValueOnce(jsonResponse({ message: 'boom' }, false, 500))
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'tertiary-id' }));
+      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'tertiary-id' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'quaternary-id' }));
 
     const result = await gupshupService.sendTemplateMessageToDoctors({
       contentVariables: { 1: 'Jane', 2: '+91999', 3: 'Amoxicillin' },
@@ -162,6 +169,7 @@ describe('sendTemplateMessageToDoctors', () => {
       primaryMessageId: 'primary-id',
       secondaryMessageId: null,
       tertiaryMessageId: 'tertiary-id',
+      quaternaryMessageId: 'quaternary-id',
     });
   });
 

@@ -1,6 +1,7 @@
 const { config } = require('../config/env');
 const logger = require('../utils/logger');
 const gupshupService = require('../services/gupshup.service');
+const shopifyOrderEditService = require('../services/shopifyOrderEdit.service');
 const {
   updateStatusByMessageId,
   findByMessageId,
@@ -68,6 +69,7 @@ function getConfiguredDoctors() {
     { number: config.gupshup.sendTo, name: config.gupshup.primaryDoctorName, messageIdField: 'gupshup_message_id' },
     { number: config.gupshup.sendToSecondary, name: config.gupshup.secondaryDoctorName, messageIdField: 'secondary_gupshup_message_id' },
     { number: config.gupshup.sendToTertiary, name: config.gupshup.tertiaryDoctorName, messageIdField: 'tertiary_gupshup_message_id' },
+    { number: config.gupshup.sendToQuaternary, name: config.gupshup.quaternaryDoctorName, messageIdField: 'quaternary_gupshup_message_id' },
   ].filter((doctor) => doctor.number);
 }
 
@@ -113,6 +115,40 @@ async function notifyOtherDoctors(reply, updated, status, productsText) {
   }
 }
 
+/**
+ * Best-effort Shopify-side actions once a doctor has responded — feature
+ * flagged (config.shopify.rxOrderHoldActionsEnabled, default off) and only
+ * runs for requests carrying a shopify_order_gid (i.e. created via the
+ * orders/create webhook path, the only path that captures it). Runs last, so
+ * a Shopify API failure here never blocks or delays the doctor/customer
+ * WhatsApp notifications that already went out.
+ */
+async function applyOrderResolutionSideEffects(updated, status) {
+  if (!config.shopify.rxOrderHoldActionsEnabled || !updated.shopify_order_gid) return;
+
+  try {
+    if (status === 'approved') {
+      await shopifyOrderEditService.clearRxOrderMetafield(updated.shopify_order_gid);
+      await shopifyOrderEditService.removeOrderTag(updated.shopify_order_gid, config.shopify.rxTagName);
+    } else if (status === 'rejected') {
+      const rxItems = (updated.products || []).filter((product) => product.variant_id);
+      for (const item of rxItems) {
+        await shopifyOrderEditService.holdOrderLineItem(updated.shopify_order_gid, item.variant_id, item.sku);
+      }
+      await shopifyOrderEditService.clearRxOrderMetafield(updated.shopify_order_gid);
+      await shopifyOrderEditService.removeOrderTag(updated.shopify_order_gid, config.shopify.rxTagName);
+    }
+  } catch (err) {
+    logger.error('Failed to apply Shopify order side effects after doctor decision', {
+      error: err.message,
+      details: err.details,
+      id: updated.id,
+      status,
+      shopifyOrderGid: updated.shopify_order_gid,
+    });
+  }
+}
+
 async function logUnmatchedReply(reply) {
   const existing = await findByMessageId(reply.originalMessageId);
   if (existing) {
@@ -145,6 +181,7 @@ async function handleWebhook(req, res) {
         const productsText = summarizeProducts(updated.products);
         await notifyCustomer(updated, reply.status, productsText);
         await notifyOtherDoctors(reply, updated, reply.status, productsText);
+        await applyOrderResolutionSideEffects(updated, reply.status);
       } else {
         await logUnmatchedReply(reply);
       }

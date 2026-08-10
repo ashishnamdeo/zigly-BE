@@ -66,10 +66,10 @@ async function sendTemplateMessage({ contentVariables, headerImageUrl, destinati
 
 /**
  * Sends the prescription template to the primary doctor number, and also to
- * the secondary/tertiary ones (whichever are configured) so all are notified
- * at the same time. Backup sends are best-effort: if one fails, the others
- * still have the request, so this logs and continues rather than failing the
- * whole request over a backup number.
+ * the secondary/tertiary/quaternary ones (whichever are configured) so all
+ * are notified at the same time. Backup sends are best-effort: if one fails,
+ * the others still have the request, so this logs and continues rather than
+ * failing the whole request over a backup number.
  */
 async function sendTemplateMessageToDoctors({ contentVariables, headerImageUrl }) {
   const primaryResult = await sendTemplateMessage({ contentVariables, headerImageUrl });
@@ -87,8 +87,9 @@ async function sendTemplateMessageToDoctors({ contentVariables, headerImageUrl }
 
   const secondaryMessageId = await sendToBackupDoctor(config.gupshup.sendToSecondary);
   const tertiaryMessageId = await sendToBackupDoctor(config.gupshup.sendToTertiary);
+  const quaternaryMessageId = await sendToBackupDoctor(config.gupshup.sendToQuaternary);
 
-  return { primaryMessageId: primaryResult.messageId, secondaryMessageId, tertiaryMessageId };
+  return { primaryMessageId: primaryResult.messageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId };
 }
 
 /**

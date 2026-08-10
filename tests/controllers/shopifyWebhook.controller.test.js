@@ -3,7 +3,10 @@ const crypto = require('crypto');
 const WEBHOOK_SECRET = 'test-webhook-secret';
 
 jest.mock('../../src/config/env', () => ({
-  config: { shopifyWebhookSecret: 'test-webhook-secret' },
+  config: {
+    shopifyWebhookSecret: 'test-webhook-secret',
+    shopify: { orderOriginAllowlist: '' },
+  },
 }));
 jest.mock('../../src/services/gupshup.service');
 jest.mock('../../src/repositories/prescriptionRequest.repository');
@@ -93,6 +96,60 @@ it('acks 200 without any side effects when the order has no Rx line items', asyn
   expect(res.status).toHaveBeenCalledWith(200);
   expect(existsByShopifyOrderId).not.toHaveBeenCalled();
   expect(gupshupService.sendTemplateMessageToDoctors).not.toHaveBeenCalled();
+});
+
+describe('order origin allowlist (SHOPIFY_ORDER_ORIGIN_ALLOWLIST)', () => {
+  afterEach(() => {
+    const { config } = require('../../src/config/env');
+    config.shopify.orderOriginAllowlist = '';
+  });
+
+  it('skips processing entirely for an order whose landing_page_url does not match the allowlist', async () => {
+    const { config } = require('../../src/config/env');
+    config.shopify.orderOriginAllowlist = '.shopifypreview.com';
+
+    const order = rxOrder({
+      note_attributes: [{ name: 'landing_page_url', value: 'https://zigly.com/' }],
+    });
+    const res = mockRes();
+
+    await handleOrderCreate(signedRequest(order), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(existsByShopifyOrderId).not.toHaveBeenCalled();
+    expect(gupshupService.sendTemplateMessageToDoctors).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      'Skipping orders/create webhook: order origin not in the test allowlist',
+      expect.objectContaining({ landingPageUrl: 'https://zigly.com/' }),
+    );
+  });
+
+  it('processes an order whose landing_page_url matches the allowlist', async () => {
+    const { config } = require('../../src/config/env');
+    config.shopify.orderOriginAllowlist = '.shopifypreview.com';
+
+    const order = rxOrder({
+      note_attributes: [{ name: 'landing_page_url', value: 'https://abc123-92312043836.shopifypreview.com/' }],
+    });
+    const res = mockRes();
+
+    await handleOrderCreate(signedRequest(order), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalled();
+  });
+
+  it('processes every order when the allowlist is empty (going-live setting)', async () => {
+    const { config } = require('../../src/config/env');
+    config.shopify.orderOriginAllowlist = '';
+
+    const order = rxOrder({ note_attributes: [{ name: 'landing_page_url', value: 'https://zigly.com/' }] });
+    const res = mockRes();
+
+    await handleOrderCreate(signedRequest(order), res);
+
+    expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalled();
+  });
 });
 
 it('sends a consult-method WhatsApp template and persists the request for a new Rx order', async () => {

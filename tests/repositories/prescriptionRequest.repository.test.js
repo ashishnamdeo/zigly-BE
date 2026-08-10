@@ -17,12 +17,14 @@ describe('createPrescriptionRequest', () => {
       gupshupMessageId: 'primary-id',
       secondaryGupshupMessageId: 'secondary-id',
       tertiaryGupshupMessageId: 'tertiary-id',
+      quaternaryGupshupMessageId: 'quaternary-id',
       customerName: 'Jane Doe',
       customerPhone: '+919999999999',
       method: 'upload',
       fileUrl: 'https://example.com/rx.png',
       products: [{ product_id: 1 }],
       shopifyOrderId: '#1001',
+      shopifyOrderGid: 'gid://shopify/Order/1001',
     });
 
     expect(id).toBe(42);
@@ -32,12 +34,14 @@ describe('createPrescriptionRequest', () => {
         'primary-id',
         'secondary-id',
         'tertiary-id',
+        'quaternary-id',
         'Jane Doe',
         '+919999999999',
         'upload',
         'https://example.com/rx.png',
         JSON.stringify([{ product_id: 1 }]),
         '#1001',
+        'gid://shopify/Order/1001',
       ],
     );
   });
@@ -53,7 +57,7 @@ describe('createPrescriptionRequest', () => {
     });
 
     const params = pool.query.mock.calls[0][1];
-    expect(params).toEqual(['primary-id', null, null, 'Jane Doe', '+919999999999', 'consult', null, '[]', null]);
+    expect(params).toEqual(['primary-id', null, null, null, 'Jane Doe', '+919999999999', 'consult', null, '[]', null, null]);
   });
 });
 

@@ -120,7 +120,7 @@ async function uploadPrescription(req, res, next) {
     // NOTE: for PDF uploads this still sends the PDF as the header "image",
     // which WhatsApp will likely reject — PDFs need a real fallback header
     // image or a separate document-message flow, still to be resolved.
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
+    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
       contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
       headerImageUrl: publicFileUrl,
     });
@@ -141,6 +141,7 @@ async function uploadPrescription(req, res, next) {
         gupshupMessageId: primaryMessageId,
         secondaryGupshupMessageId: secondaryMessageId,
         tertiaryGupshupMessageId: tertiaryMessageId,
+        quaternaryGupshupMessageId: quaternaryMessageId,
         customerName: name,
         customerPhone: phone,
         method: 'upload',
@@ -171,7 +172,7 @@ async function requestConsultation(req, res, next) {
     validateConsultInput({ name, phone });
     const products = parseProducts(req.body.products);
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
+    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
       contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
       headerImageUrl: CONSULT_HEADER_IMAGE_URL,
     });
@@ -190,6 +191,7 @@ async function requestConsultation(req, res, next) {
         gupshupMessageId: primaryMessageId,
         secondaryGupshupMessageId: secondaryMessageId,
         tertiaryGupshupMessageId: tertiaryMessageId,
+        quaternaryGupshupMessageId: quaternaryMessageId,
         customerName: name,
         customerPhone: phone,
         method: 'consult',
@@ -260,7 +262,7 @@ async function autoConsultFromOrder(req, res, next) {
       return res.status(200).json({ success: true, name, phone });
     }
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
+    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
       contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
       headerImageUrl: CONSULT_HEADER_IMAGE_URL,
     });
@@ -281,6 +283,7 @@ async function autoConsultFromOrder(req, res, next) {
         gupshupMessageId: primaryMessageId,
         secondaryGupshupMessageId: secondaryMessageId,
         tertiaryGupshupMessageId: tertiaryMessageId,
+        quaternaryGupshupMessageId: quaternaryMessageId,
         customerName: name,
         customerPhone: phone,
         method: 'consult',
@@ -325,7 +328,7 @@ async function autoUploadFromOrder(req, res, next) {
       mimeType: file.mimetype,
     });
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
+    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
       contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
       headerImageUrl: publicFileUrl,
     });
@@ -348,6 +351,7 @@ async function autoUploadFromOrder(req, res, next) {
         gupshupMessageId: primaryMessageId,
         secondaryGupshupMessageId: secondaryMessageId,
         tertiaryGupshupMessageId: tertiaryMessageId,
+        quaternaryGupshupMessageId: quaternaryMessageId,
         customerName: name,
         customerPhone: phone,
         method: 'upload',

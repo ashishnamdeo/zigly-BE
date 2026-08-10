@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS prescription_requests (
   -- Approve/Reject webhook reply.
   secondary_gupshup_message_id TEXT UNIQUE,
   tertiary_gupshup_message_id TEXT UNIQUE,
+  quaternary_gupshup_message_id TEXT UNIQUE,
 
   customer_name      TEXT NOT NULL,
   customer_phone     TEXT NOT NULL,
@@ -37,6 +38,12 @@ CREATE TABLE IF NOT EXISTS prescription_requests (
   -- Populated once the order is actually placed, to link this approval back
   -- to order fulfillment.
   shopify_order_id   TEXT,
+
+  -- Order's Admin GraphQL GID (e.g. "gid://shopify/Order/123"), captured
+  -- alongside shopify_order_id so an Approve/Reject decision can call back
+  -- into the Shopify Admin API (metafield clear, line-item cancel) without a
+  -- separate lookup. Null for any request created before this column existed.
+  shopify_order_gid  TEXT,
 
   status             TEXT NOT NULL DEFAULT 'pending'
                        CHECK (status IN ('pending', 'approved', 'rejected')),
@@ -68,6 +75,11 @@ CREATE TABLE IF NOT EXISTS pending_prescription_uploads (
 -- statements by hand against it.
 ALTER TABLE prescription_requests ADD COLUMN IF NOT EXISTS secondary_gupshup_message_id TEXT UNIQUE;
 ALTER TABLE prescription_requests ADD COLUMN IF NOT EXISTS tertiary_gupshup_message_id TEXT UNIQUE;
+ALTER TABLE prescription_requests ADD COLUMN IF NOT EXISTS quaternary_gupshup_message_id TEXT UNIQUE;
+
+-- Added for the Rx order-hold Approve/Reject Shopify actions (metafield
+-- clear, line-item cancel) — see docs/unicommerce-prescription-hold.md.
+ALTER TABLE prescription_requests ADD COLUMN IF NOT EXISTS shopify_order_gid TEXT;
 
 -- escalated_at was used by the old "wait 2 min, then notify secondary" flow,
 -- superseded by notifying both doctors at once — drop it if present.

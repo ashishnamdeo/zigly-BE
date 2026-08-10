@@ -32,6 +32,10 @@ const config = {
     // other two. Optional — if unset, only primary (+ secondary, if set)
     // are notified.
     sendToTertiary: process.env.GUPSHUP_SEND_TO_TERTIARY,
+    // Quaternary (4th) doctor WhatsApp number, notified at the same time as
+    // the other three. Optional — if unset, only whichever of
+    // primary/secondary/tertiary are configured get notified.
+    sendToQuaternary: process.env.GUPSHUP_SEND_TO_QUATERNARY,
     // Approved HSM template ID from Gupshup Console > Templates
     templateId: process.env.GUPSHUP_TEMPLATE_ID,
     // Approved HSM template ID for notifying the customer of an approve/reject decision
@@ -48,6 +52,7 @@ const config = {
     primaryDoctorName: process.env.GUPSHUP_PRIMARY_DOCTOR_NAME,
     secondaryDoctorName: process.env.GUPSHUP_SECONDARY_DOCTOR_NAME,
     tertiaryDoctorName: process.env.GUPSHUP_TERTIARY_DOCTOR_NAME,
+    quaternaryDoctorName: process.env.GUPSHUP_QUATERNARY_DOCTOR_NAME,
     // App name registered on Gupshup, required by the API as "src.name"
     appName: process.env.GUPSHUP_APP_NAME,
   },
@@ -61,15 +66,34 @@ const config = {
   shopify: {
     // your-store.myshopify.com — used to call back into the Admin API.
     shopDomain: process.env.SHOPIFY_SHOP_DOMAIN,
-    // Custom app Admin API access token with write_orders scope (Admin >
-    // Settings > Apps and sales channels > Develop apps).
+    // Custom app Admin API access token — needs write_orders scope for the
+    // metafield write, and write_order_edits for the Approve/Reject Shopify
+    // actions below (Admin > Settings > Apps and sales channels > Develop apps).
     adminApiToken: process.env.SHOPIFY_ADMIN_API_TOKEN,
     apiVersion: process.env.SHOPIFY_API_VERSION || '2026-01',
     // Namespace/key for the order metafield that flags whether the order
     // contains an Rx product. Defaults match a no-code "custom data"
     // definition created in Admin > Settings > Custom data > Orders.
     rxMetafieldNamespace: process.env.SHOPIFY_RX_METAFIELD_NAMESPACE || 'custom',
-    rxMetafieldKey: process.env.SHOPIFY_RX_METAFIELD_KEY || 'rx-prescription-order',
+    rxMetafieldKey: process.env.SHOPIFY_RX_METAFIELD_KEY || 'rx_prescription_order',
+    // Order tag added alongside the metafield above — this is what the
+    // Unicommerce connector actually watches to hold an order's sync, per
+    // the connector team (the metafield is for internal/Admin visibility).
+    rxTagName: process.env.SHOPIFY_RX_TAG_NAME || 'rx_prescription_order',
+    // While this feature is still being tested, orders/create only runs its
+    // Rx logic (metafield/tag/WhatsApp/hold) for orders whose landing_page_url
+    // note attribute contains this substring — i.e. only theme-preview
+    // traffic (*.shopifypreview.com), never real zigly.com customers. Set to
+    // an empty string to process every order once ready to go live.
+    orderOriginAllowlist:
+      process.env.SHOPIFY_ORDER_ORIGIN_ALLOWLIST !== undefined
+        ? process.env.SHOPIFY_ORDER_ORIGIN_ALLOWLIST
+        : '.shopifypreview.com',
+    // Feature flag for the Approve/Reject → Shopify side effects (clear the
+    // rx metafield on approve; cancel the Rx line item + clear the metafield
+    // on reject). Defaults off so this stays inert until validated against a
+    // sandbox store — see shopifyOrderEdit.service.js.
+    rxOrderHoldActionsEnabled: process.env.RX_ORDER_HOLD_ACTIONS_ENABLED === 'true',
   },
 
   maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB) || 10,
