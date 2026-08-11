@@ -5,6 +5,7 @@ const shopifyOrderEditService = require('../services/shopifyOrderEdit.service');
 const {
   updateStatusByMessageId,
   findByMessageId,
+  setResolvingDoctor,
 } = require('../repositories/prescriptionRequest.repository');
 
 const BUTTON_TO_STATUS = {
@@ -149,14 +150,57 @@ async function applyOrderResolutionSideEffects(updated, status) {
   }
 }
 
+// Tells whichever doctor just replied to an already-resolved request that
+// their reply is a no-op — reuses the same doctor-status-template contract
+// as notifyOtherDoctors (this is really the same message, just addressed to
+// a doctor replying late instead of the ones who never got a chance to).
+// Skipped when the late reply is a double-tap from the SAME doctor who
+// resolved it (same originalMessageId → same number every time, since a
+// doctor's Approve/Reject buttons live on that one original template send) —
+// "already approved by [your own name]" is a confusing thing to tell someone
+// about their own decision, so there's nothing useful to send back.
+async function notifyLateReplyDoctor(existing, reply) {
+  const doctors = getConfiguredDoctors();
+  const lateDoctor = doctors.find((doctor) => existing[doctor.messageIdField] === reply.originalMessageId);
+  if (!lateDoctor || lateDoctor.number === existing.doctor_mobile) return;
+
+  const useDoctorTemplate = Boolean(config.gupshup.doctorStatusTemplateId);
+  const productsText = summarizeProducts(existing.products);
+
+  try {
+    await gupshupService.sendStatusTemplateMessage({
+      to: lateDoctor.number,
+      templateId: useDoctorTemplate ? config.gupshup.doctorStatusTemplateId : undefined,
+      contentVariables: useDoctorTemplate
+        ? {
+            1: existing.customer_name,
+            2: existing.doctor_name || 'another doctor',
+            3: STATUS_LABEL[existing.status],
+          }
+        : {
+            1: existing.customer_name,
+            2: productsText || 'a prescription request',
+            3: STATUS_LABEL[existing.status],
+          },
+    });
+  } catch (notifyErr) {
+    logger.error('Failed to notify late-replying doctor that the request was already resolved', {
+      error: notifyErr.message,
+      id: existing.id,
+      doctor: lateDoctor.number,
+    });
+  }
+}
+
 async function logUnmatchedReply(reply) {
   const existing = await findByMessageId(reply.originalMessageId);
   if (existing) {
-    logger.info('Button reply received for a request already resolved by another doctor, ignoring', {
+    logger.info('Button reply received for a request that is already resolved', {
       id: existing.id,
       status: existing.status,
       gupshupMessageId: reply.originalMessageId,
     });
+    await notifyLateReplyDoctor(existing, reply);
   } else {
     logger.warn('Button reply received but no matching prescription request found', {
       gupshupMessageId: reply.originalMessageId,
@@ -177,6 +221,20 @@ async function handleWebhook(req, res) {
           status: reply.status,
           gupshupMessageId: reply.originalMessageId,
         });
+
+        const doctors = getConfiguredDoctors();
+        const respondingDoctor = doctors.find((doctor) => updated[doctor.messageIdField] === reply.originalMessageId);
+        if (respondingDoctor) {
+          try {
+            await setResolvingDoctor(updated.id, respondingDoctor.name, respondingDoctor.number);
+            updated.doctor_name = respondingDoctor.name;
+          } catch (recordErr) {
+            logger.error('Failed to record which doctor resolved the request', {
+              error: recordErr.message,
+              id: updated.id,
+            });
+          }
+        }
 
         const productsText = summarizeProducts(updated.products);
         await notifyCustomer(updated, reply.status, productsText);

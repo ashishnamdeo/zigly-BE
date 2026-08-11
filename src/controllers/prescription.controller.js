@@ -147,6 +147,7 @@ async function uploadPrescription(req, res, next) {
         method: 'upload',
         fileUrl: publicFileUrl,
         products,
+        medicineName: summarizeProducts(products),
       });
     } catch (dbErr) {
       // The WhatsApp message already went out — don't fail the request over
@@ -197,6 +198,7 @@ async function requestConsultation(req, res, next) {
         method: 'consult',
         fileUrl: null,
         products,
+        medicineName: summarizeProducts(products),
       });
     } catch (dbErr) {
       logger.error('Failed to persist consultation request', { error: dbErr.message });
@@ -289,6 +291,7 @@ async function autoConsultFromOrder(req, res, next) {
         method: 'consult',
         fileUrl: null,
         products,
+        medicineName: summarizeProducts(products),
         shopifyOrderId: orderId || null,
       });
     } catch (dbErr) {
@@ -357,6 +360,7 @@ async function autoUploadFromOrder(req, res, next) {
         method: 'upload',
         fileUrl: publicFileUrl,
         products,
+        medicineName: summarizeProducts(products),
         shopifyOrderId: orderId || null,
       });
     } catch (dbErr) {

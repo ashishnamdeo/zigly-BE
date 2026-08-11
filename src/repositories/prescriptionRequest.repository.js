@@ -10,13 +10,14 @@ async function createPrescriptionRequest({
   method,
   fileUrl,
   products,
+  medicineName,
   shopifyOrderId,
   shopifyOrderGid,
 }) {
   const result = await pool.query(
     `INSERT INTO prescription_requests
-       (gupshup_message_id, secondary_gupshup_message_id, tertiary_gupshup_message_id, quaternary_gupshup_message_id, customer_name, customer_phone, method, file_url, products, shopify_order_id, shopify_order_gid)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       (gupshup_message_id, secondary_gupshup_message_id, tertiary_gupshup_message_id, quaternary_gupshup_message_id, customer_name, customer_phone, method, file_url, products, medicine_name, shopify_order_id, shopify_order_gid)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING id`,
     [
       gupshupMessageId,
@@ -28,6 +29,7 @@ async function createPrescriptionRequest({
       method,
       fileUrl || null,
       JSON.stringify(products || []),
+      medicineName || null,
       shopifyOrderId || null,
       shopifyOrderGid || null,
     ],
@@ -52,16 +54,34 @@ async function updateStatusByMessageId(gupshupMessageId, status) {
   return result.rows[0] || null;
 }
 
-// Used only when updateStatusByMessageId finds no pending row to update, to
-// tell apart "already resolved by another doctor" (row exists) from a truly
-// unrecognized message id (row doesn't exist) for logging purposes.
+// Used when updateStatusByMessageId finds no pending row to update, to tell
+// apart "already resolved by another doctor" (row exists) from a truly
+// unrecognized message id (row doesn't exist). The extra columns beyond
+// id/status let the caller both identify which doctor's number this late
+// reply came in on (the message-id columns) and tell them who already
+// resolved it (doctor_name, customer_name, products).
 async function findByMessageId(gupshupMessageId) {
   const result = await pool.query(
-    `SELECT id, status FROM prescription_requests
+    `SELECT id, status, customer_name, products, doctor_name,
+            gupshup_message_id, secondary_gupshup_message_id, tertiary_gupshup_message_id, quaternary_gupshup_message_id
+     FROM prescription_requests
      WHERE gupshup_message_id = $1 OR secondary_gupshup_message_id = $1 OR tertiary_gupshup_message_id = $1 OR quaternary_gupshup_message_id = $1`,
     [gupshupMessageId],
   );
   return result.rows[0] || null;
+}
+
+// Snapshots which configured doctor slot (name + number, from env config —
+// not a foreign key) resolved a request, captured the moment their
+// Approve/Reject reply comes in. Repurposes the doctor_name/doctor_mobile
+// columns, originally meant for a pharmacist to transcribe the *prescribing*
+// doctor from the uploaded photo — that pharmacist-review flow was never
+// built, so there's nothing else populating these columns.
+async function setResolvingDoctor(id, doctorName, doctorMobile) {
+  await pool.query(
+    `UPDATE prescription_requests SET doctor_name = $2, doctor_mobile = $3 WHERE id = $1`,
+    [id, doctorName || null, doctorMobile || null],
+  );
 }
 
 // Matches on the last 10 digits on both sides since customer_phone is stored
@@ -96,6 +116,7 @@ module.exports = {
   createPrescriptionRequest,
   updateStatusByMessageId,
   findByMessageId,
+  setResolvingDoctor,
   findRecentByPhone,
   existsByShopifyOrderId,
 };

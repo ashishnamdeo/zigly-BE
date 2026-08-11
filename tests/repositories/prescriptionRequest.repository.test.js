@@ -5,6 +5,7 @@ const {
   createPrescriptionRequest,
   updateStatusByMessageId,
   findByMessageId,
+  setResolvingDoctor,
   findRecentByPhone,
   existsByShopifyOrderId,
 } = require('../../src/repositories/prescriptionRequest.repository');
@@ -23,6 +24,7 @@ describe('createPrescriptionRequest', () => {
       method: 'upload',
       fileUrl: 'https://example.com/rx.png',
       products: [{ product_id: 1 }],
+      medicineName: 'Amoxicillin 250mg',
       shopifyOrderId: '#1001',
       shopifyOrderGid: 'gid://shopify/Order/1001',
     });
@@ -40,6 +42,7 @@ describe('createPrescriptionRequest', () => {
         'upload',
         'https://example.com/rx.png',
         JSON.stringify([{ product_id: 1 }]),
+        'Amoxicillin 250mg',
         '#1001',
         'gid://shopify/Order/1001',
       ],
@@ -57,7 +60,7 @@ describe('createPrescriptionRequest', () => {
     });
 
     const params = pool.query.mock.calls[0][1];
-    expect(params).toEqual(['primary-id', null, null, null, 'Jane Doe', '+919999999999', 'consult', null, '[]', null, null]);
+    expect(params).toEqual(['primary-id', null, null, null, 'Jane Doe', '+919999999999', 'consult', null, '[]', null, null, null]);
   });
 });
 
@@ -83,18 +86,40 @@ describe('updateStatusByMessageId', () => {
 
 describe('findByMessageId', () => {
   it('returns the matching row', async () => {
-    pool.query.mockResolvedValue({ rows: [{ id: 1, status: 'approved' }] });
+    pool.query.mockResolvedValue({ rows: [{ id: 1, status: 'approved', doctor_name: 'Dr Primary' }] });
 
     const result = await findByMessageId('gs-1');
 
-    expect(result).toEqual({ id: 1, status: 'approved' });
-    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('SELECT id, status'), ['gs-1']);
+    expect(result).toEqual({ id: 1, status: 'approved', doctor_name: 'Dr Primary' });
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('SELECT id, status, customer_name, products, doctor_name'), ['gs-1']);
   });
 
   it('returns null when nothing matches', async () => {
     pool.query.mockResolvedValue({ rows: [] });
 
     expect(await findByMessageId('gs-unknown')).toBeNull();
+  });
+});
+
+describe('setResolvingDoctor', () => {
+  it('updates doctor_name and doctor_mobile by id', async () => {
+    pool.query.mockResolvedValue({ rows: [] });
+
+    await setResolvingDoctor(1, 'Dr Primary', '+911111111111');
+
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('SET doctor_name = $2, doctor_mobile = $3'), [
+      1,
+      'Dr Primary',
+      '+911111111111',
+    ]);
+  });
+
+  it('defaults to null when name/mobile are missing', async () => {
+    pool.query.mockResolvedValue({ rows: [] });
+
+    await setResolvingDoctor(1, undefined, undefined);
+
+    expect(pool.query).toHaveBeenCalledWith(expect.anything(), [1, null, null]);
   });
 });
 

@@ -26,12 +26,16 @@ CREATE TABLE IF NOT EXISTS prescription_requests (
   -- [{"product_id": 123, "title": "...", "quantity": 2}, ...]
   products           JSONB NOT NULL DEFAULT '[]',
 
-  -- Medicine name(s) as written on the prescription itself (may differ from
-  -- the ordered product) — filled in by the pharmacist during review.
+  -- Same product/medicine summary text sent to the doctors in the WhatsApp
+  -- template's content variables (see summarizeProducts) — captured here too
+  -- so it doesn't have to be recomputed from `products` for display.
   medicine_name      TEXT,
 
-  -- Prescribing doctor's details, transcribed from the prescription during
-  -- pharmacist review (or captured directly if the consult flow collects it).
+  -- Which configured doctor slot (env config, not a foreign key) actually
+  -- resolved this request via Approve/Reject — snapshotted the moment their
+  -- reply comes in, since a doctor's name/number could change in config
+  -- later. NOT the prescribing doctor from the photo (no pharmacist-review
+  -- flow exists to transcribe that).
   doctor_name        TEXT,
   doctor_mobile      TEXT,
 

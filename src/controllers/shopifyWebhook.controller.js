@@ -189,6 +189,7 @@ async function handleOrderCreate(req, res) {
         method,
         fileUrl,
         products: prescriptionItems,
+        medicineName: summarizeProducts(prescriptionItems),
         shopifyOrderId,
         shopifyOrderGid: orderGid,
       });
