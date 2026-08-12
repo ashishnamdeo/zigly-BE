@@ -36,8 +36,13 @@ const config = {
     // the other three. Optional — if unset, only whichever of
     // primary/secondary/tertiary are configured get notified.
     sendToQuaternary: process.env.GUPSHUP_SEND_TO_QUATERNARY,
-    // Approved HSM template ID from Gupshup Console > Templates
+    // Approved HSM template ID from Gupshup Console > Templates — used for
+    // upload requests (has a prescription photo/PDF as the header image).
     templateId: process.env.GUPSHUP_TEMPLATE_ID,
+    // Separate approved template for consult requests (no prescription
+    // uploaded — "our doctor will call you" copy instead of "review the
+    // attached prescription"). Falls back to templateId if unset.
+    consultTemplateId: process.env.GUPSHUP_CONSULT_TEMPLATE_ID,
     // Approved HSM template ID for notifying the customer of an approve/reject decision
     statusTemplateId: process.env.GUPSHUP_STATUS_TEMPLATE_ID,
     // Approved HSM template ID for notifying the OTHER doctor (not the one

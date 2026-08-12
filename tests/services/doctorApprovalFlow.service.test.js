@@ -9,6 +9,8 @@ jest.mock('../../src/config/env', () => ({
       secondaryDoctorName: 'Dr Secondary',
       tertiaryDoctorName: 'Dr Tertiary',
       quaternaryDoctorName: undefined,
+      templateId: 'upload-template-id',
+      consultTemplateId: 'consult-template-id',
     },
     escalation: { windowSeconds: 60 },
   },
@@ -52,6 +54,7 @@ describe('startFlow', () => {
       contentVariables: { 1: 'Jane Doe', 2: '+919999999999', 3: 'Amoxicillin (x2)' },
       headerImageUrl: 'https://example.com/banner.png',
       destination: '+911111111111',
+      templateId: 'consult-template-id',
     });
     expect(repo.insertDoctorRequestLog).toHaveBeenCalledWith(
       expect.objectContaining({ prescriptionRequestId: 'req-1', doctorSlot: 'primary', gupshupMessageId: 'gs-primary' }),
@@ -61,6 +64,32 @@ describe('startFlow', () => {
       slot: 'primary',
       delaySeconds: 60,
     });
+  });
+
+  it('uses the plain upload template (not the consult one) for an upload request', async () => {
+    repo.createPrescriptionRequest.mockResolvedValue('req-1');
+    gupshupService.sendTemplateMessage.mockResolvedValue({ messageId: 'gs-primary' });
+
+    await flow.startFlow({ customerName: 'Jane', customerPhone: '+91999', method: 'upload', products: [] });
+
+    expect(gupshupService.sendTemplateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ templateId: 'upload-template-id' }),
+    );
+  });
+
+  it('falls back to the upload template if no consult template is configured', async () => {
+    const originalConsultId = require('../../src/config/env').config.gupshup.consultTemplateId;
+    require('../../src/config/env').config.gupshup.consultTemplateId = undefined;
+    repo.createPrescriptionRequest.mockResolvedValue('req-1');
+    gupshupService.sendTemplateMessage.mockResolvedValue({ messageId: 'gs-primary' });
+
+    await flow.startFlow({ customerName: 'Jane', customerPhone: '+91999', method: 'consult', products: [] });
+
+    expect(gupshupService.sendTemplateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ templateId: 'upload-template-id' }),
+    );
+
+    require('../../src/config/env').config.gupshup.consultTemplateId = originalConsultId;
   });
 
   it('logs a send_failed attempt and does not schedule an escalation when the WhatsApp send fails', async () => {
@@ -144,6 +173,7 @@ describe('escalate', () => {
       customer_phone: '+919999999999',
       products: [{ title: 'Amoxicillin', quantity: 2 }],
       file_url: null,
+      method: 'consult',
     };
     repo.transitionRequestStatus.mockResolvedValue(won);
     repo.findAwaitingDoctorLog.mockResolvedValue({ id: 'log-1' });
@@ -157,6 +187,7 @@ describe('escalate', () => {
       contentVariables: { 1: 'Jane Doe', 2: '+919999999999', 3: 'Amoxicillin (x2)' },
       headerImageUrl: flow.CONSULT_HEADER_IMAGE_URL,
       destination: '+912222222222',
+      templateId: 'consult-template-id',
     });
     expect(result).toEqual({ outcome: 'escalated', to: 'secondary' });
   });

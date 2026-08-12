@@ -42,14 +42,14 @@ async function postToGupshup(path, params, { destination } = {}) {
  * be supplied via a separate "message" field alongside "template" — putting
  * the image URL inside template.params returns a (#2012) format-mismatch error.
  */
-async function sendTemplateMessage({ contentVariables, headerImageUrl, destination }) {
+async function sendTemplateMessage({ contentVariables, headerImageUrl, destination, templateId }) {
   try {
     const params = Object.keys(contentVariables)
       .sort((a, b) => Number(a) - Number(b))
       .map((key) => contentVariables[key]);
 
     const payload = {
-      template: JSON.stringify({ id: config.gupshup.templateId, params }),
+      template: JSON.stringify({ id: templateId || config.gupshup.templateId, params }),
     };
     if (headerImageUrl) {
       payload.message = JSON.stringify({ type: 'image', image: { link: headerImageUrl } });

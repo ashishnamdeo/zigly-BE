@@ -15,6 +15,15 @@ function statusForSlot(slot) {
   return `pending_${slot}`;
 }
 
+// Consult requests ("no prescription uploaded, doctor will call") use their
+// own approved template — different copy than the upload template, which
+// assumes a photo is attached. Falls back to the upload template if the
+// consult one isn't configured yet, so nothing breaks mid-rollout.
+function templateIdForMethod(method) {
+  if (method === 'consult') return config.gupshup.consultTemplateId || config.gupshup.templateId;
+  return config.gupshup.templateId;
+}
+
 function summarizeProducts(products) {
   return (products || [])
     .map((product) => {
@@ -30,7 +39,7 @@ function summarizeProducts(products) {
 // both the send and the schedule: a failure in either is logged and the
 // request is left exactly where it is rather than thrown, since there's
 // nothing else useful to do with an already-created request mid-flow.
-async function pageDoctor(requestId, doctor, { customerName, customerPhone, products, headerImageUrl }) {
+async function pageDoctor(requestId, doctor, { customerName, customerPhone, products, headerImageUrl, templateId }) {
   const contentVariables = { 1: customerName, 2: customerPhone, 3: summarizeProducts(products) };
 
   let messageId = null;
@@ -39,6 +48,7 @@ async function pageDoctor(requestId, doctor, { customerName, customerPhone, prod
       contentVariables,
       headerImageUrl,
       destination: doctor.number,
+      templateId,
     });
     messageId = result.messageId;
   } catch (err) {
@@ -102,7 +112,7 @@ async function startFlow({ customerName, customerPhone, method, fileUrl, product
     return requestId;
   }
 
-  await pageDoctor(requestId, first, { customerName, customerPhone, products, headerImageUrl });
+  await pageDoctor(requestId, first, { customerName, customerPhone, products, headerImageUrl, templateId: templateIdForMethod(method) });
   return requestId;
 }
 
@@ -169,6 +179,7 @@ async function escalate({ requestId, slot }) {
     customerPhone: won.customer_phone,
     products: won.products,
     headerImageUrl: won.file_url || CONSULT_HEADER_IMAGE_URL,
+    templateId: templateIdForMethod(won.method),
   });
 
   return { outcome: 'escalated', to: next.slot };
