@@ -199,7 +199,7 @@ describe('a late reply (already resolved by another doctor)', () => {
     config.gupshup.doctorStatusTemplateId = undefined;
   });
 
-  it('sends nothing when the late reply is a double-tap from the doctor who actually resolved it', async () => {
+  it('tells the doctor their decision already stands when the late reply is a double-tap from the doctor who actually resolved it', async () => {
     doctorApprovalFlow.resolve.mockResolvedValue({
       outcome: 'late',
       slot: 'primary',
@@ -211,6 +211,26 @@ describe('a late reply (already resolved by another doctor)', () => {
     await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, mockRes());
 
     expect(gupshupService.sendStatusTemplateMessage).not.toHaveBeenCalled();
+    expect(gupshupService.sendTextMessage).toHaveBeenCalledWith({
+      to: '+911111111111',
+      text: "You've already marked this request for Jane Doe as Approved. That decision has already been acted on, so this tap didn't change anything.",
+    });
+  });
+
+  it('still responds 200 when notifying the doctor of their own double-tap fails', async () => {
+    doctorApprovalFlow.resolve.mockResolvedValue({
+      outcome: 'late',
+      slot: 'primary',
+      doctorName: 'Dr Primary',
+      doctorMobile: '+911111111111',
+      request: { id: 1, customer_name: 'Jane Doe', products: [], status: 'approved', doctor_name: 'Dr Primary', doctor_mobile: '+911111111111' },
+    });
+    gupshupService.sendTextMessage.mockRejectedValueOnce(new Error('gupshup down'));
+
+    const res = mockRes();
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
   });
 });
 

@@ -64,7 +64,26 @@ async function notifyCustomer(request, status, productsText) {
  * out to the way the old simultaneous-notify model needed.
  */
 async function notifyLateDoctor({ doctorName, doctorMobile, request }) {
-  if (!doctorMobile || doctorMobile === request.doctor_mobile) return;
+  if (!doctorMobile) return;
+
+  // The doctor who actually resolved it tapping again (e.g. Approve then
+  // Reject moments later) — tell them their original decision already
+  // stands, rather than staying silent as if the tap did nothing.
+  if (doctorMobile === request.doctor_mobile) {
+    try {
+      await gupshupService.sendTextMessage({
+        to: doctorMobile,
+        text: `You've already marked this request for ${request.customer_name} as ${STATUS_LABEL[request.status]}. That decision has already been acted on, so this tap didn't change anything.`,
+      });
+    } catch (notifyErr) {
+      logger.error('Failed to notify doctor that their decision was already recorded', {
+        error: notifyErr.message,
+        id: request.id,
+        doctor: doctorMobile,
+      });
+    }
+    return;
+  }
 
   const useDoctorTemplate = Boolean(config.gupshup.doctorStatusTemplateId);
   const productsText = doctorApprovalFlow.summarizeProducts(request.products);

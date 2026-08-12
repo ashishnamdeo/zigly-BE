@@ -86,6 +86,23 @@ async function sendMediaMessage({ mediaUrl, body, fileExtension }) {
 }
 
 /**
+ * Plain session text — no approved template needed, since this only ever
+ * follows the doctor's own button tap, which opens/refreshes their 24h
+ * customer-service window. Used for the "you already decided this one"
+ * double-tap notice, which has no approved HSM template of its own.
+ */
+async function sendTextMessage({ to, text }) {
+  try {
+    return await postToGupshup('/msg', { message: JSON.stringify({ type: 'text', text }) }, { destination: to });
+  } catch (err) {
+    logger.error('Gupshup text message failed', { error: err.message, to });
+    throw new ApiError(502, 'Failed to send WhatsApp text message via Gupshup', {
+      message: err.message,
+    });
+  }
+}
+
+/**
  * Notifies the customer of an approve/reject decision via the approved
  * prescription_status_update template, so delivery doesn't depend on an
  * open 24h WhatsApp session with that number the way a plain text message
@@ -113,5 +130,6 @@ async function sendStatusTemplateMessage({ to, contentVariables, templateId }) {
 module.exports = {
   sendTemplateMessage,
   sendMediaMessage,
+  sendTextMessage,
   sendStatusTemplateMessage,
 };
