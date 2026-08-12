@@ -2,22 +2,16 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
-const gupshupService = require('../services/gupshup.service');
 const s3Service = require('../services/s3.service');
+const doctorApprovalFlow = require('../services/doctorApprovalFlow.service');
 const { ALLOWED_MIME_TYPES } = require('../middleware/upload.middleware');
-const {
-  createPrescriptionRequest,
-  findRecentByPhone,
-  existsByShopifyOrderId,
-} = require('../repositories/prescriptionRequest.repository');
+const { findRecentByPhone, existsByShopifyOrderId } = require('../repositories/prescriptionRequest.repository');
 const { createPendingUpload } = require('../repositories/pendingPrescriptionUpload.repository');
+
+const { CONSULT_HEADER_IMAGE_URL } = doctorApprovalFlow;
 
 const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
 const MAX_PRODUCT_IDS = 100;
-
-// Generic banner used as the required template image header for consult
-// requests, which have no prescription file to attach.
-const CONSULT_HEADER_IMAGE_URL = 'https://zigly.com/cdn/shop/files/1920X360_vetfirst_banner.png?v=1776228816&width=2000';
 
 function validateInput({ name, phone }, file) {
   if (!name || !name.trim()) {
@@ -113,47 +107,23 @@ async function uploadPrescription(req, res, next) {
       mimeType: file.mimetype,
     });
 
-    // The approved template has an image header, so the prescription photo
-    // and the name/phone/products notification text go out together in a
-    // single template send. Adjust the "1"/"2"/"3" keys below to match your
-    // actual template's placeholder order.
     // NOTE: for PDF uploads this still sends the PDF as the header "image",
     // which WhatsApp will likely reject — PDFs need a real fallback header
     // image or a separate document-message flow, still to be resolved.
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
-      headerImageUrl: publicFileUrl,
-    });
-
-    logger.info('Prescription forwarded to WhatsApp', {
-      name,
-      phone,
-      products,
-      file: filename,
-      fileUrl: publicFileUrl,
-      primaryMessageId,
-      secondaryMessageId,
-      tertiaryMessageId,
-    });
+    logger.info('Prescription upload starting doctor approval flow', { name, phone, products, file: filename, fileUrl: publicFileUrl });
 
     try {
-      await createPrescriptionRequest({
-        gupshupMessageId: primaryMessageId,
-        secondaryGupshupMessageId: secondaryMessageId,
-        tertiaryGupshupMessageId: tertiaryMessageId,
-        quaternaryGupshupMessageId: quaternaryMessageId,
+      await doctorApprovalFlow.startFlow({
         customerName: name,
         customerPhone: phone,
         method: 'upload',
         fileUrl: publicFileUrl,
         products,
         medicineName: summarizeProducts(products),
+        headerImageUrl: publicFileUrl,
       });
-    } catch (dbErr) {
-      // The WhatsApp message already went out — don't fail the request over
-      // a DB write, but this does mean the Approve/Reject webhook won't be
-      // able to match this request back later.
-      logger.error('Failed to persist prescription request', { error: dbErr.message });
+    } catch (flowErr) {
+      logger.error('Failed to start doctor approval flow for prescription upload', { error: flowErr.message });
     }
 
     res.status(200).json({
@@ -173,35 +143,20 @@ async function requestConsultation(req, res, next) {
     validateConsultInput({ name, phone });
     const products = parseProducts(req.body.products);
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
-      headerImageUrl: CONSULT_HEADER_IMAGE_URL,
-    });
-
-    logger.info('Consultation request forwarded to WhatsApp', {
-      name,
-      phone,
-      products,
-      primaryMessageId,
-      secondaryMessageId,
-      tertiaryMessageId,
-    });
+    logger.info('Consultation request starting doctor approval flow', { name, phone, products });
 
     try {
-      await createPrescriptionRequest({
-        gupshupMessageId: primaryMessageId,
-        secondaryGupshupMessageId: secondaryMessageId,
-        tertiaryGupshupMessageId: tertiaryMessageId,
-        quaternaryGupshupMessageId: quaternaryMessageId,
+      await doctorApprovalFlow.startFlow({
         customerName: name,
         customerPhone: phone,
         method: 'consult',
         fileUrl: null,
         products,
         medicineName: summarizeProducts(products),
+        headerImageUrl: CONSULT_HEADER_IMAGE_URL,
       });
-    } catch (dbErr) {
-      logger.error('Failed to persist consultation request', { error: dbErr.message });
+    } catch (flowErr) {
+      logger.error('Failed to start doctor approval flow for consultation request', { error: flowErr.message });
     }
 
     res.status(200).json({
@@ -264,28 +219,10 @@ async function autoConsultFromOrder(req, res, next) {
       return res.status(200).json({ success: true, name, phone });
     }
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
-      headerImageUrl: CONSULT_HEADER_IMAGE_URL,
-    });
-
-    logger.info('Auto-consult request forwarded to WhatsApp', {
-      orderId,
-      cartId,
-      name,
-      phone,
-      products,
-      primaryMessageId,
-      secondaryMessageId,
-      tertiaryMessageId,
-    });
+    logger.info('Auto-consult request starting doctor approval flow', { orderId, cartId, name, phone, products });
 
     try {
-      await createPrescriptionRequest({
-        gupshupMessageId: primaryMessageId,
-        secondaryGupshupMessageId: secondaryMessageId,
-        tertiaryGupshupMessageId: tertiaryMessageId,
-        quaternaryGupshupMessageId: quaternaryMessageId,
+      await doctorApprovalFlow.startFlow({
         customerName: name,
         customerPhone: phone,
         method: 'consult',
@@ -293,9 +230,10 @@ async function autoConsultFromOrder(req, res, next) {
         products,
         medicineName: summarizeProducts(products),
         shopifyOrderId: orderId || null,
+        headerImageUrl: CONSULT_HEADER_IMAGE_URL,
       });
-    } catch (dbErr) {
-      logger.error('Failed to persist auto-consult request', { error: dbErr.message });
+    } catch (flowErr) {
+      logger.error('Failed to start doctor approval flow for auto-consult request', { error: flowErr.message });
     }
 
     res.status(200).json({ success: true, name, phone });
@@ -331,30 +269,10 @@ async function autoUploadFromOrder(req, res, next) {
       mimeType: file.mimetype,
     });
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: name, 2: phone, 3: summarizeProducts(products) },
-      headerImageUrl: publicFileUrl,
-    });
-
-    logger.info('Auto-upload prescription forwarded to WhatsApp', {
-      orderId,
-      cartId,
-      name,
-      phone,
-      products,
-      file: filename,
-      fileUrl: publicFileUrl,
-      primaryMessageId,
-      secondaryMessageId,
-      tertiaryMessageId,
-    });
+    logger.info('Auto-upload prescription starting doctor approval flow', { orderId, cartId, name, phone, products, file: filename, fileUrl: publicFileUrl });
 
     try {
-      await createPrescriptionRequest({
-        gupshupMessageId: primaryMessageId,
-        secondaryGupshupMessageId: secondaryMessageId,
-        tertiaryGupshupMessageId: tertiaryMessageId,
-        quaternaryGupshupMessageId: quaternaryMessageId,
+      await doctorApprovalFlow.startFlow({
         customerName: name,
         customerPhone: phone,
         method: 'upload',
@@ -362,9 +280,10 @@ async function autoUploadFromOrder(req, res, next) {
         products,
         medicineName: summarizeProducts(products),
         shopifyOrderId: orderId || null,
+        headerImageUrl: publicFileUrl,
       });
-    } catch (dbErr) {
-      logger.error('Failed to persist auto-upload prescription request', { error: dbErr.message });
+    } catch (flowErr) {
+      logger.error('Failed to start doctor approval flow for auto-upload prescription request', { error: flowErr.message });
     }
 
     res.status(200).json({ success: true, name, phone });

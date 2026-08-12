@@ -1,14 +1,12 @@
 const crypto = require('crypto');
 const { config } = require('../config/env');
 const logger = require('../utils/logger');
-const gupshupService = require('../services/gupshup.service');
 const shopifyService = require('../services/shopify.service');
-const { createPrescriptionRequest, existsByShopifyOrderId } = require('../repositories/prescriptionRequest.repository');
+const doctorApprovalFlow = require('../services/doctorApprovalFlow.service');
+const { existsByShopifyOrderId } = require('../repositories/prescriptionRequest.repository');
 const { consumePendingUpload } = require('../repositories/pendingPrescriptionUpload.repository');
 
-// Generic banner used as the required template image header for consult
-// requests, which have no prescription file to attach.
-const CONSULT_HEADER_IMAGE_URL = 'https://zigly.com/cdn/shop/files/1920X360_vetfirst_banner.png?v=1776228816&width=2000';
+const { CONSULT_HEADER_IMAGE_URL } = doctorApprovalFlow;
 
 function verifySignature(rawBody, hmacHeader) {
   if (!config.shopifyWebhookSecret || !hmacHeader || !rawBody) return false;
@@ -162,28 +160,16 @@ async function handleOrderCreate(req, res) {
       }
     }
 
-    const { primaryMessageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId } = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: name, 2: phone, 3: summarizeProducts(prescriptionItems) },
-      headerImageUrl,
-    });
-
-    logger.info('Prescription request forwarded to WhatsApp from orders/create webhook', {
+    logger.info('Prescription request starting doctor approval flow from orders/create webhook', {
       shopifyOrderId,
       name,
       phone,
       method,
       products: prescriptionItems,
-      primaryMessageId,
-      secondaryMessageId,
-      tertiaryMessageId,
     });
 
     try {
-      await createPrescriptionRequest({
-        gupshupMessageId: primaryMessageId,
-        secondaryGupshupMessageId: secondaryMessageId,
-        tertiaryGupshupMessageId: tertiaryMessageId,
-        quaternaryGupshupMessageId: quaternaryMessageId,
+      await doctorApprovalFlow.startFlow({
         customerName: name,
         customerPhone: phone,
         method,
@@ -192,9 +178,10 @@ async function handleOrderCreate(req, res) {
         medicineName: summarizeProducts(prescriptionItems),
         shopifyOrderId,
         shopifyOrderGid: orderGid,
+        headerImageUrl,
       });
-    } catch (dbErr) {
-      logger.error('Failed to persist prescription request from webhook', { error: dbErr.message, shopifyOrderId });
+    } catch (flowErr) {
+      logger.error('Failed to start doctor approval flow from webhook', { error: flowErr.message, shopifyOrderId });
     }
 
     res.status(200).json({ success: true });

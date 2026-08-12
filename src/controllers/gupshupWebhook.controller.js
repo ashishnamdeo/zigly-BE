@@ -2,11 +2,7 @@ const { config } = require('../config/env');
 const logger = require('../utils/logger');
 const gupshupService = require('../services/gupshup.service');
 const shopifyOrderEditService = require('../services/shopifyOrderEdit.service');
-const {
-  updateStatusByMessageId,
-  findByMessageId,
-  setResolvingDoctor,
-} = require('../repositories/prescriptionRequest.repository');
+const doctorApprovalFlow = require('../services/doctorApprovalFlow.service');
 
 const BUTTON_TO_STATUS = {
   approve: 'approved',
@@ -17,15 +13,6 @@ const STATUS_LABEL = {
   approved: 'Approved',
   rejected: 'Rejected',
 };
-
-function summarizeProducts(products) {
-  return (products || [])
-    .map((product) => {
-      const title = product.title || 'Item';
-      return product.quantity > 1 ? `${title} (x${product.quantity})` : title;
-    })
-    .join(', ');
-}
 
 /**
  * Verified against a real button tap: Gupshup sends
@@ -47,72 +34,58 @@ function extractButtonReply(body) {
   return { status, originalMessageId };
 }
 
-async function notifyCustomer(updated, status, productsText) {
+async function notifyCustomer(request, status, productsText) {
   try {
     await gupshupService.sendStatusTemplateMessage({
-      to: updated.customer_phone,
+      to: request.customer_phone,
       contentVariables: {
-        1: updated.customer_name,
+        1: request.customer_name,
         2: productsText || 'your prescription request',
         3: STATUS_LABEL[status],
       },
     });
   } catch (notifyErr) {
-    logger.error('Failed to notify customer of status update', { error: notifyErr.message, id: updated.id });
+    logger.error('Failed to notify customer of status update', { error: notifyErr.message, id: request.id });
   }
 }
 
-// The fixed set of doctor slots this app knows about — DB columns and env
-// vars are named per-role (primary/secondary/tertiary) rather than a dynamic
-// list, so this mapping is spelled out explicitly instead of derived.
-function getConfiguredDoctors() {
-  return [
-    { number: config.gupshup.sendTo, name: config.gupshup.primaryDoctorName, messageIdField: 'gupshup_message_id' },
-    { number: config.gupshup.sendToSecondary, name: config.gupshup.secondaryDoctorName, messageIdField: 'secondary_gupshup_message_id' },
-    { number: config.gupshup.sendToTertiary, name: config.gupshup.tertiaryDoctorName, messageIdField: 'tertiary_gupshup_message_id' },
-    { number: config.gupshup.sendToQuaternary, name: config.gupshup.quaternaryDoctorName, messageIdField: 'quaternary_gupshup_message_id' },
-  ].filter((doctor) => doctor.number);
-}
+/**
+ * Tells a doctor who replied after the request was already resolved that
+ * their reply is a no-op — e.g. Secondary was already paged and decided
+ * before a slow Primary reply comes in, or any doctor double-taps their own
+ * button (skipped below: nothing useful to tell someone about their own
+ * decision). This is now a single doctor at most, since only one slot is
+ * ever mid-flight at a time — there's no longer a whole panel to fan this
+ * out to the way the old simultaneous-notify model needed.
+ */
+async function notifyLateDoctor({ doctorName, doctorMobile, request }) {
+  if (!doctorMobile || doctorMobile === request.doctor_mobile) return;
 
-// Whichever doctor's number a reply came in on, every other configured
-// doctor needs to know it's already been handled so they don't act on a
-// stale request.
-async function notifyOtherDoctors(reply, updated, status, productsText) {
-  const doctors = getConfiguredDoctors();
-  const respondingDoctor = doctors.find((doctor) => updated[doctor.messageIdField] === reply.originalMessageId);
-
-  // Once GUPSHUP_DOCTOR_STATUS_TEMPLATE_ID is approved and set, this switches
-  // to naming which doctor responded instead of reusing the customer-facing
-  // template with the product list. Approved template (prescription_doctor_status_notify)
-  // takes exactly 3 variables: {1: customer name, 2: responding doctor's name, 3: status}.
   const useDoctorTemplate = Boolean(config.gupshup.doctorStatusTemplateId);
+  const productsText = doctorApprovalFlow.summarizeProducts(request.products);
 
-  const otherDoctors = doctors.filter((doctor) => !respondingDoctor || doctor.number !== respondingDoctor.number);
-
-  for (const doctor of otherDoctors) {
-    try {
-      await gupshupService.sendStatusTemplateMessage({
-        to: doctor.number,
-        templateId: useDoctorTemplate ? config.gupshup.doctorStatusTemplateId : undefined,
-        contentVariables: useDoctorTemplate
-          ? {
-              1: updated.customer_name,
-              2: respondingDoctor?.name || 'the other doctor',
-              3: STATUS_LABEL[status],
-            }
-          : {
-              1: updated.customer_name,
-              2: productsText || 'a prescription request',
-              3: STATUS_LABEL[status],
-            },
-      });
-    } catch (notifyErr) {
-      logger.error('Failed to notify other doctor of status update', {
-        error: notifyErr.message,
-        id: updated.id,
-        doctor: doctor.number,
-      });
-    }
+  try {
+    await gupshupService.sendStatusTemplateMessage({
+      to: doctorMobile,
+      templateId: useDoctorTemplate ? config.gupshup.doctorStatusTemplateId : undefined,
+      contentVariables: useDoctorTemplate
+        ? {
+            1: request.customer_name,
+            2: request.doctor_name || 'another doctor',
+            3: STATUS_LABEL[request.status],
+          }
+        : {
+            1: request.customer_name,
+            2: productsText || 'a prescription request',
+            3: STATUS_LABEL[request.status],
+          },
+    });
+  } catch (notifyErr) {
+    logger.error('Failed to notify late-replying doctor that the request was already resolved', {
+      error: notifyErr.message,
+      id: request.id,
+      doctor: doctorMobile,
+    });
   }
 }
 
@@ -124,86 +97,28 @@ async function notifyOtherDoctors(reply, updated, status, productsText) {
  * a Shopify API failure here never blocks or delays the doctor/customer
  * WhatsApp notifications that already went out.
  */
-async function applyOrderResolutionSideEffects(updated, status) {
-  if (!config.shopify.rxOrderHoldActionsEnabled || !updated.shopify_order_gid) return;
+async function applyOrderResolutionSideEffects(request, status) {
+  if (!config.shopify.rxOrderHoldActionsEnabled || !request.shopify_order_gid) return;
 
   try {
     if (status === 'approved') {
-      await shopifyOrderEditService.clearRxOrderMetafield(updated.shopify_order_gid);
-      await shopifyOrderEditService.removeOrderTag(updated.shopify_order_gid, config.shopify.rxTagName);
+      await shopifyOrderEditService.clearRxOrderMetafield(request.shopify_order_gid);
+      await shopifyOrderEditService.removeOrderTag(request.shopify_order_gid, config.shopify.rxTagName);
     } else if (status === 'rejected') {
-      const rxItems = (updated.products || []).filter((product) => product.variant_id);
+      const rxItems = (request.products || []).filter((product) => product.variant_id);
       for (const item of rxItems) {
-        await shopifyOrderEditService.holdOrderLineItem(updated.shopify_order_gid, item.variant_id, item.sku);
+        await shopifyOrderEditService.holdOrderLineItem(request.shopify_order_gid, item.variant_id, item.sku);
       }
-      await shopifyOrderEditService.clearRxOrderMetafield(updated.shopify_order_gid);
-      await shopifyOrderEditService.removeOrderTag(updated.shopify_order_gid, config.shopify.rxTagName);
+      await shopifyOrderEditService.clearRxOrderMetafield(request.shopify_order_gid);
+      await shopifyOrderEditService.removeOrderTag(request.shopify_order_gid, config.shopify.rxTagName);
     }
   } catch (err) {
     logger.error('Failed to apply Shopify order side effects after doctor decision', {
       error: err.message,
       details: err.details,
-      id: updated.id,
+      id: request.id,
       status,
-      shopifyOrderGid: updated.shopify_order_gid,
-    });
-  }
-}
-
-// Tells whichever doctor just replied to an already-resolved request that
-// their reply is a no-op — reuses the same doctor-status-template contract
-// as notifyOtherDoctors (this is really the same message, just addressed to
-// a doctor replying late instead of the ones who never got a chance to).
-// Skipped when the late reply is a double-tap from the SAME doctor who
-// resolved it (same originalMessageId → same number every time, since a
-// doctor's Approve/Reject buttons live on that one original template send) —
-// "already approved by [your own name]" is a confusing thing to tell someone
-// about their own decision, so there's nothing useful to send back.
-async function notifyLateReplyDoctor(existing, reply) {
-  const doctors = getConfiguredDoctors();
-  const lateDoctor = doctors.find((doctor) => existing[doctor.messageIdField] === reply.originalMessageId);
-  if (!lateDoctor || lateDoctor.number === existing.doctor_mobile) return;
-
-  const useDoctorTemplate = Boolean(config.gupshup.doctorStatusTemplateId);
-  const productsText = summarizeProducts(existing.products);
-
-  try {
-    await gupshupService.sendStatusTemplateMessage({
-      to: lateDoctor.number,
-      templateId: useDoctorTemplate ? config.gupshup.doctorStatusTemplateId : undefined,
-      contentVariables: useDoctorTemplate
-        ? {
-            1: existing.customer_name,
-            2: existing.doctor_name || 'another doctor',
-            3: STATUS_LABEL[existing.status],
-          }
-        : {
-            1: existing.customer_name,
-            2: productsText || 'a prescription request',
-            3: STATUS_LABEL[existing.status],
-          },
-    });
-  } catch (notifyErr) {
-    logger.error('Failed to notify late-replying doctor that the request was already resolved', {
-      error: notifyErr.message,
-      id: existing.id,
-      doctor: lateDoctor.number,
-    });
-  }
-}
-
-async function logUnmatchedReply(reply) {
-  const existing = await findByMessageId(reply.originalMessageId);
-  if (existing) {
-    logger.info('Button reply received for a request that is already resolved', {
-      id: existing.id,
-      status: existing.status,
-      gupshupMessageId: reply.originalMessageId,
-    });
-    await notifyLateReplyDoctor(existing, reply);
-  } else {
-    logger.warn('Button reply received but no matching prescription request found', {
-      gupshupMessageId: reply.originalMessageId,
+      shopifyOrderGid: request.shopify_order_gid,
     });
   }
 }
@@ -214,34 +129,29 @@ async function handleWebhook(req, res) {
   try {
     const reply = extractButtonReply(req.body);
     if (reply) {
-      const updated = await updateStatusByMessageId(reply.originalMessageId, reply.status);
-      if (updated) {
-        logger.info('Prescription request status updated', {
-          id: updated.id,
-          status: reply.status,
+      const result = await doctorApprovalFlow.resolve(reply.originalMessageId, reply.status);
+
+      if (result.outcome === 'resolved') {
+        const { request, slot } = result;
+        logger.info('Prescription request status updated', { id: request.id, status: reply.status, slot });
+
+        const productsText = doctorApprovalFlow.summarizeProducts(request.products);
+        await notifyCustomer(request, reply.status, productsText);
+        await applyOrderResolutionSideEffects(request, reply.status);
+      } else if (result.outcome === 'late') {
+        logger.info('Button reply received for a request already resolved by another doctor', {
+          slot: result.slot,
           gupshupMessageId: reply.originalMessageId,
         });
-
-        const doctors = getConfiguredDoctors();
-        const respondingDoctor = doctors.find((doctor) => updated[doctor.messageIdField] === reply.originalMessageId);
-        if (respondingDoctor) {
-          try {
-            await setResolvingDoctor(updated.id, respondingDoctor.name, respondingDoctor.number);
-            updated.doctor_name = respondingDoctor.name;
-          } catch (recordErr) {
-            logger.error('Failed to record which doctor resolved the request', {
-              error: recordErr.message,
-              id: updated.id,
-            });
-          }
-        }
-
-        const productsText = summarizeProducts(updated.products);
-        await notifyCustomer(updated, reply.status, productsText);
-        await notifyOtherDoctors(reply, updated, reply.status, productsText);
-        await applyOrderResolutionSideEffects(updated, reply.status);
+        await notifyLateDoctor(result);
+      } else if (result.outcome === 'duplicate') {
+        logger.info('Duplicate webhook delivery for an already-superseded reply, ignoring', {
+          gupshupMessageId: reply.originalMessageId,
+        });
       } else {
-        await logUnmatchedReply(reply);
+        logger.warn('Button reply received but no matching prescription request found', {
+          gupshupMessageId: reply.originalMessageId,
+        });
       }
     }
   } catch (err) {

@@ -15,7 +15,6 @@ jest.mock('../../src/config/env', () => ({
   },
 }));
 
-const { config } = require('../../src/config/env');
 const gupshupService = require('../../src/services/gupshup.service');
 
 function jsonResponse(body, ok = true, status = 200) {
@@ -26,7 +25,7 @@ beforeEach(() => {
   global.fetch = jest.fn();
 });
 
-describe('sendTemplateMessage (via sendTemplateMessageToDoctors primary send)', () => {
+describe('sendTemplateMessage', () => {
   it('posts to Gupshup with source/destination digits only and no "+" prefix', async () => {
     global.fetch.mockResolvedValue(jsonResponse({ status: 'submitted', messageId: 'msg-1' }));
 
@@ -99,85 +98,6 @@ describe('sendTemplateMessage (via sendTemplateMessageToDoctors primary send)', 
 
     await expect(
       gupshupService.sendTemplateMessage({ contentVariables: { 1: 'a', 2: 'b', 3: 'c' } }),
-    ).rejects.toMatchObject({ statusCode: 502 });
-  });
-});
-
-describe('sendTemplateMessageToDoctors', () => {
-  it('sends to primary, secondary, tertiary, and quaternary numbers when all are configured', async () => {
-    global.fetch
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'primary-id' }))
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'secondary-id' }))
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'tertiary-id' }))
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'quaternary-id' }));
-
-    const result = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: 'Jane', 2: '+91999', 3: 'Amoxicillin' },
-      headerImageUrl: 'https://example.com/rx.png',
-    });
-
-    expect(global.fetch).toHaveBeenCalledTimes(4);
-    expect(result).toEqual({
-      primaryMessageId: 'primary-id',
-      secondaryMessageId: 'secondary-id',
-      tertiaryMessageId: 'tertiary-id',
-      quaternaryMessageId: 'quaternary-id',
-    });
-
-    const destinations = global.fetch.mock.calls.map(
-      ([, options]) => new URLSearchParams(options.body).get('destination'),
-    );
-    expect(destinations).toEqual(['912222222222', '913333333333', '914444444444', '916666666666']);
-  });
-
-  it('skips backup doctors that are not configured', async () => {
-    config.gupshup.sendToSecondary = undefined;
-    config.gupshup.sendToTertiary = undefined;
-    config.gupshup.sendToQuaternary = undefined;
-
-    global.fetch.mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'primary-id' }));
-
-    const result = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: 'Jane', 2: '+91999', 3: 'Amoxicillin' },
-    });
-
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      primaryMessageId: 'primary-id',
-      secondaryMessageId: null,
-      tertiaryMessageId: null,
-      quaternaryMessageId: null,
-    });
-
-    config.gupshup.sendToSecondary = '+913333333333';
-    config.gupshup.sendToTertiary = '+914444444444';
-    config.gupshup.sendToQuaternary = '+916666666666';
-  });
-
-  it('still returns the primary result when a backup doctor send fails', async () => {
-    global.fetch
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'primary-id' }))
-      .mockResolvedValueOnce(jsonResponse({ message: 'boom' }, false, 500))
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'tertiary-id' }))
-      .mockResolvedValueOnce(jsonResponse({ status: 'submitted', messageId: 'quaternary-id' }));
-
-    const result = await gupshupService.sendTemplateMessageToDoctors({
-      contentVariables: { 1: 'Jane', 2: '+91999', 3: 'Amoxicillin' },
-    });
-
-    expect(result).toEqual({
-      primaryMessageId: 'primary-id',
-      secondaryMessageId: null,
-      tertiaryMessageId: 'tertiary-id',
-      quaternaryMessageId: 'quaternary-id',
-    });
-  });
-
-  it('propagates a failure of the primary doctor send', async () => {
-    global.fetch.mockResolvedValueOnce(jsonResponse({ message: 'boom' }, false, 500));
-
-    await expect(
-      gupshupService.sendTemplateMessageToDoctors({ contentVariables: { 1: 'a', 2: 'b', 3: 'c' } }),
     ).rejects.toMatchObject({ statusCode: 502 });
   });
 });

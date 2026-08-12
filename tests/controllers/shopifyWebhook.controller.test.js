@@ -8,14 +8,19 @@ jest.mock('../../src/config/env', () => ({
     shopify: { orderOriginAllowlist: '' },
   },
 }));
-jest.mock('../../src/services/gupshup.service');
+jest.mock('../../src/services/shopify.service');
+jest.mock('../../src/services/doctorApprovalFlow.service', () => ({
+  startFlow: jest.fn(),
+  CONSULT_HEADER_IMAGE_URL: 'https://zigly.com/cdn/shop/files/1920X360_vetfirst_banner.png?v=1776228816&width=2000',
+}));
 jest.mock('../../src/repositories/prescriptionRequest.repository');
 jest.mock('../../src/repositories/pendingPrescriptionUpload.repository');
 jest.mock('../../src/utils/logger');
 jest.mock('../../src/db/pool', () => ({ query: jest.fn() }));
 
-const gupshupService = require('../../src/services/gupshup.service');
-const { createPrescriptionRequest, existsByShopifyOrderId } = require('../../src/repositories/prescriptionRequest.repository');
+const shopifyService = require('../../src/services/shopify.service');
+const doctorApprovalFlow = require('../../src/services/doctorApprovalFlow.service');
+const { existsByShopifyOrderId } = require('../../src/repositories/prescriptionRequest.repository');
 const { consumePendingUpload } = require('../../src/repositories/pendingPrescriptionUpload.repository');
 const logger = require('../../src/utils/logger');
 const { handleOrderCreate } = require('../../src/controllers/shopifyWebhook.controller');
@@ -55,12 +60,9 @@ function rxOrder(overrides = {}) {
 
 beforeEach(() => {
   existsByShopifyOrderId.mockResolvedValue(false);
-  gupshupService.sendTemplateMessageToDoctors.mockResolvedValue({
-    primaryMessageId: 'primary-id',
-    secondaryMessageId: null,
-    tertiaryMessageId: null,
-  });
-  createPrescriptionRequest.mockResolvedValue(1);
+  doctorApprovalFlow.startFlow.mockResolvedValue('req-1');
+  shopifyService.setRxProductOrderMetafield.mockResolvedValue({});
+  shopifyService.addOrderTag.mockResolvedValue({});
 });
 
 it('rejects with 401 when the HMAC signature does not match', async () => {
@@ -95,7 +97,7 @@ it('acks 200 without any side effects when the order has no Rx line items', asyn
 
   expect(res.status).toHaveBeenCalledWith(200);
   expect(existsByShopifyOrderId).not.toHaveBeenCalled();
-  expect(gupshupService.sendTemplateMessageToDoctors).not.toHaveBeenCalled();
+  expect(doctorApprovalFlow.startFlow).not.toHaveBeenCalled();
 });
 
 describe('order origin allowlist (SHOPIFY_ORDER_ORIGIN_ALLOWLIST)', () => {
@@ -117,7 +119,7 @@ describe('order origin allowlist (SHOPIFY_ORDER_ORIGIN_ALLOWLIST)', () => {
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(existsByShopifyOrderId).not.toHaveBeenCalled();
-    expect(gupshupService.sendTemplateMessageToDoctors).not.toHaveBeenCalled();
+    expect(doctorApprovalFlow.startFlow).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       'Skipping orders/create webhook: order origin not in the test allowlist',
       expect.objectContaining({ landingPageUrl: 'https://zigly.com/' }),
@@ -136,7 +138,7 @@ describe('order origin allowlist (SHOPIFY_ORDER_ORIGIN_ALLOWLIST)', () => {
     await handleOrderCreate(signedRequest(order), res);
 
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalled();
+    expect(doctorApprovalFlow.startFlow).toHaveBeenCalled();
   });
 
   it('processes every order when the allowlist is empty (going-live setting)', async () => {
@@ -148,28 +150,24 @@ describe('order origin allowlist (SHOPIFY_ORDER_ORIGIN_ALLOWLIST)', () => {
 
     await handleOrderCreate(signedRequest(order), res);
 
-    expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalled();
+    expect(doctorApprovalFlow.startFlow).toHaveBeenCalled();
   });
 });
 
-it('sends a consult-method WhatsApp template and persists the request for a new Rx order', async () => {
+it('starts the doctor approval flow with a consult method for a new Rx order', async () => {
   const res = mockRes();
 
   await handleOrderCreate(signedRequest(rxOrder()), res);
 
   expect(existsByShopifyOrderId).toHaveBeenCalledWith('#ZG1001');
-  expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalledWith({
-    contentVariables: { 1: 'Jane Doe', 2: '+919999999999', 3: 'Amoxicillin (x2)' },
-    headerImageUrl: 'https://zigly.com/cdn/shop/files/1920X360_vetfirst_banner.png?v=1776228816&width=2000',
-  });
-  expect(createPrescriptionRequest).toHaveBeenCalledWith(
+  expect(doctorApprovalFlow.startFlow).toHaveBeenCalledWith(
     expect.objectContaining({
-      gupshupMessageId: 'primary-id',
       customerName: 'Jane Doe',
       customerPhone: '+919999999999',
       method: 'consult',
       fileUrl: null,
       shopifyOrderId: '#ZG1001',
+      headerImageUrl: doctorApprovalFlow.CONSULT_HEADER_IMAGE_URL,
     }),
   );
   expect(res.status).toHaveBeenCalledWith(200);
@@ -188,18 +186,17 @@ it('skips duplicate deliveries for an order already recorded', async () => {
 
   await handleOrderCreate(signedRequest(rxOrder()), res);
 
-  expect(gupshupService.sendTemplateMessageToDoctors).not.toHaveBeenCalled();
-  expect(createPrescriptionRequest).not.toHaveBeenCalled();
+  expect(doctorApprovalFlow.startFlow).not.toHaveBeenCalled();
   expect(res.status).toHaveBeenCalledWith(200);
 });
 
-it('logs an error and does not send when the order has no phone anywhere', async () => {
+it('logs an error and does not start the flow when the order has no phone anywhere', async () => {
   const order = rxOrder({ phone: undefined, shipping_address: {}, billing_address: {}, customer: {} });
   const res = mockRes();
 
   await handleOrderCreate(signedRequest(order), res);
 
-  expect(gupshupService.sendTemplateMessageToDoctors).not.toHaveBeenCalled();
+  expect(doctorApprovalFlow.startFlow).not.toHaveBeenCalled();
   expect(logger.error).toHaveBeenCalledWith(
     'orders/create webhook has Rx line items but no phone on the order',
     { shopifyOrderId: '#ZG1001' },
@@ -217,8 +214,8 @@ it('resolves customer name/phone from the customer object when shipping/billing 
 
   await handleOrderCreate(signedRequest(order), mockRes());
 
-  expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalledWith(
-    expect.objectContaining({ contentVariables: { 1: 'Alex Kim', 2: '+917777777777', 3: 'Amoxicillin (x2)' } }),
+  expect(doctorApprovalFlow.startFlow).toHaveBeenCalledWith(
+    expect.objectContaining({ customerName: 'Alex Kim', customerPhone: '+917777777777' }),
   );
 });
 
@@ -227,9 +224,7 @@ it('defaults the customer name to "Customer" when no name is present at all', as
 
   await handleOrderCreate(signedRequest(order), mockRes());
 
-  expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalledWith(
-    expect.objectContaining({ contentVariables: { 1: 'Customer', 2: '+919999999999', 3: 'Amoxicillin (x2)' } }),
-  );
+  expect(doctorApprovalFlow.startFlow).toHaveBeenCalledWith(expect.objectContaining({ customerName: 'Customer' }));
 });
 
 describe('staged prescription upload via prescription_upload_key note attribute', () => {
@@ -240,11 +235,8 @@ describe('staged prescription upload via prescription_upload_key note attribute'
     await handleOrderCreate(signedRequest(order), mockRes());
 
     expect(consumePendingUpload).toHaveBeenCalledWith('key-123');
-    expect(gupshupService.sendTemplateMessageToDoctors).toHaveBeenCalledWith(
-      expect.objectContaining({ headerImageUrl: 'https://s3.example.com/staged-rx.png' }),
-    );
-    expect(createPrescriptionRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'upload', fileUrl: 'https://s3.example.com/staged-rx.png' }),
+    expect(doctorApprovalFlow.startFlow).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'upload', fileUrl: 'https://s3.example.com/staged-rx.png', headerImageUrl: 'https://s3.example.com/staged-rx.png' }),
     );
   });
 
@@ -258,12 +250,12 @@ describe('staged prescription upload via prescription_upload_key note attribute'
       'orders/create webhook had a prescription_upload_key with no matching staged upload',
       { shopifyOrderId: '#ZG1001', uploadKey: 'stale-key' },
     );
-    expect(createPrescriptionRequest).toHaveBeenCalledWith(expect.objectContaining({ method: 'consult', fileUrl: null }));
+    expect(doctorApprovalFlow.startFlow).toHaveBeenCalledWith(expect.objectContaining({ method: 'consult', fileUrl: null }));
   });
 });
 
-it('still responds 200 when persisting the request fails after the WhatsApp send succeeds', async () => {
-  createPrescriptionRequest.mockRejectedValue(new Error('db down'));
+it('still responds 200 when starting the doctor approval flow fails', async () => {
+  doctorApprovalFlow.startFlow.mockRejectedValue(new Error('db down'));
   const res = mockRes();
 
   await handleOrderCreate(signedRequest(rxOrder()), res);
@@ -273,7 +265,7 @@ it('still responds 200 when persisting the request fails after the WhatsApp send
 });
 
 it('still responds 200 when an unexpected error is thrown mid-processing', async () => {
-  gupshupService.sendTemplateMessageToDoctors.mockRejectedValue(new Error('gupshup exploded'));
+  existsByShopifyOrderId.mockRejectedValue(new Error('db exploded'));
   const res = mockRes();
 
   await handleOrderCreate(signedRequest(rxOrder()), res);
@@ -282,6 +274,6 @@ it('still responds 200 when an unexpected error is thrown mid-processing', async
   expect(res.json).toHaveBeenCalledWith({ success: true });
   expect(logger.error).toHaveBeenCalledWith(
     'Failed to process orders/create webhook',
-    expect.objectContaining({ error: 'gupshup exploded' }),
+    expect.objectContaining({ error: 'db exploded' }),
   );
 });

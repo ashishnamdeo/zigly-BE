@@ -65,34 +65,6 @@ async function sendTemplateMessage({ contentVariables, headerImageUrl, destinati
 }
 
 /**
- * Sends the prescription template to the primary doctor number, and also to
- * the secondary/tertiary/quaternary ones (whichever are configured) so all
- * are notified at the same time. Backup sends are best-effort: if one fails,
- * the others still have the request, so this logs and continues rather than
- * failing the whole request over a backup number.
- */
-async function sendTemplateMessageToDoctors({ contentVariables, headerImageUrl }) {
-  const primaryResult = await sendTemplateMessage({ contentVariables, headerImageUrl });
-
-  const sendToBackupDoctor = async (destination) => {
-    if (!destination) return null;
-    try {
-      const result = await sendTemplateMessage({ contentVariables, headerImageUrl, destination });
-      return result.messageId;
-    } catch (err) {
-      logger.error('Failed to send prescription template to backup doctor number', { destination, error: err.message });
-      return null;
-    }
-  };
-
-  const secondaryMessageId = await sendToBackupDoctor(config.gupshup.sendToSecondary);
-  const tertiaryMessageId = await sendToBackupDoctor(config.gupshup.sendToTertiary);
-  const quaternaryMessageId = await sendToBackupDoctor(config.gupshup.sendToQuaternary);
-
-  return { primaryMessageId: primaryResult.messageId, secondaryMessageId, tertiaryMessageId, quaternaryMessageId };
-}
-
-/**
  * The prescription file itself is sent as a plain session message. This only
  * succeeds if there's an open WhatsApp session with the destination number
  * (e.g. the template message above just opened/refreshed one).
@@ -140,7 +112,6 @@ async function sendStatusTemplateMessage({ to, contentVariables, templateId }) {
 
 module.exports = {
   sendTemplateMessage,
-  sendTemplateMessageToDoctors,
   sendMediaMessage,
   sendStatusTemplateMessage,
 };

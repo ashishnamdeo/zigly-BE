@@ -49,8 +49,15 @@ CREATE TABLE IF NOT EXISTS prescription_requests (
   -- separate lookup. Null for any request created before this column existed.
   shopify_order_gid  TEXT,
 
-  status             TEXT NOT NULL DEFAULT 'pending'
-                       CHECK (status IN ('pending', 'approved', 'rejected')),
+  -- pending_<slot> tracks which doctor is currently holding the request in
+  -- the Primary -> Secondary -> Tertiary -> Quaternary sequential chain (see
+  -- doctorApprovalFlow.service.js); 'failed' means every configured doctor
+  -- timed out with no reply. approved/rejected double as "completed" too —
+  -- the Shopify/WhatsApp side effects that follow a decision run inline,
+  -- synchronously, so there's never a real gap between "decided" and "done"
+  -- worth its own status.
+  status             TEXT NOT NULL DEFAULT 'pending_primary'
+                       CHECK (status IN ('pending_primary', 'pending_secondary', 'pending_tertiary', 'pending_quaternary', 'approved', 'rejected', 'failed', 'pending')),
   pharmacist_notes    TEXT,
 
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -62,6 +69,31 @@ CREATE INDEX IF NOT EXISTS idx_prescription_requests_customer_phone
 
 CREATE INDEX IF NOT EXISTS idx_prescription_requests_status
   ON prescription_requests (status);
+
+-- One row per doctor per attempt in the sequential Primary -> Secondary ->
+-- Tertiary -> Quaternary approval chain — the complete audit trail of who
+-- was asked, when, and what happened. `outcome`:
+--   awaiting    sent, 60s timer running
+--   responded   this reply is the one that resolved the request
+--   expired     60s elapsed with no reply, chain moved to the next doctor
+--   superseded  doctor replied, but too late — someone else already resolved it
+--   send_failed the WhatsApp send itself never went out
+CREATE TABLE IF NOT EXISTS doctor_request_log (
+  id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  prescription_request_id  UUID NOT NULL REFERENCES prescription_requests(id),
+  doctor_slot               TEXT NOT NULL CHECK (doctor_slot IN ('primary', 'secondary', 'tertiary', 'quaternary')),
+  doctor_name                TEXT,
+  doctor_mobile              TEXT,
+  gupshup_message_id         TEXT UNIQUE,
+  sent_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  responded_at                TIMESTAMPTZ,
+  response                    TEXT CHECK (response IN ('approved', 'rejected')),
+  outcome                     TEXT NOT NULL DEFAULT 'awaiting'
+                               CHECK (outcome IN ('awaiting', 'responded', 'expired', 'superseded', 'send_failed')),
+  error_detail                TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_doctor_request_log_request ON doctor_request_log (prescription_request_id);
 
 -- Bridges the cart-drawer's immediate S3 upload (while still on zigly.com)
 -- to the orders/create webhook (which has no concept of an uploaded file at
@@ -85,6 +117,18 @@ ALTER TABLE prescription_requests ADD COLUMN IF NOT EXISTS quaternary_gupshup_me
 -- clear, line-item cancel) — see docs/unicommerce-prescription-hold.md.
 ALTER TABLE prescription_requests ADD COLUMN IF NOT EXISTS shopify_order_gid TEXT;
 
--- escalated_at was used by the old "wait 2 min, then notify secondary" flow,
--- superseded by notifying both doctors at once — drop it if present.
+-- escalated_at was used by an even older "wait 2 min, then notify secondary"
+-- flow, superseded by notifying all doctors at once — dropped it then.
 ALTER TABLE prescription_requests DROP COLUMN IF EXISTS escalated_at;
+
+-- Sequential Primary -> Secondary -> Tertiary -> Quaternary approval chain:
+-- widen the status values and audit every attempt in doctor_request_log
+-- instead of the old "one shared status, four message-id columns" model.
+-- Existing rows are left as 'pending'/'approved'/'rejected' — nothing
+-- re-reads the old gupshup_message_id/secondary/tertiary/quaternary columns
+-- for new requests going forward, but they're kept (not dropped) so
+-- historical rows stay queryable as they were.
+ALTER TABLE prescription_requests DROP CONSTRAINT IF EXISTS prescription_requests_status_check;
+ALTER TABLE prescription_requests ADD CONSTRAINT prescription_requests_status_check
+  CHECK (status IN ('pending_primary', 'pending_secondary', 'pending_tertiary', 'pending_quaternary', 'approved', 'rejected', 'failed', 'pending'));
+ALTER TABLE prescription_requests ALTER COLUMN status SET DEFAULT 'pending_primary';

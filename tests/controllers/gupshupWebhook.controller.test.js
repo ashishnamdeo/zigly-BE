@@ -1,14 +1,6 @@
 jest.mock('../../src/config/env', () => ({
   config: {
     gupshup: {
-      sendTo: '+911111111111',
-      sendToSecondary: '+912222222222',
-      sendToTertiary: undefined,
-      sendToQuaternary: undefined,
-      primaryDoctorName: 'Dr Primary',
-      secondaryDoctorName: 'Dr Secondary',
-      tertiaryDoctorName: undefined,
-      quaternaryDoctorName: undefined,
       doctorStatusTemplateId: undefined,
       statusTemplateId: 'status-template-id',
     },
@@ -20,14 +12,22 @@ jest.mock('../../src/config/env', () => ({
 }));
 jest.mock('../../src/services/gupshup.service');
 jest.mock('../../src/services/shopifyOrderEdit.service');
-jest.mock('../../src/repositories/prescriptionRequest.repository');
+jest.mock('../../src/services/doctorApprovalFlow.service', () => ({
+  resolve: jest.fn(),
+  // A plain re-implementation rather than requireActual — the real module
+  // pulls in the repository -> db/pool chain, which would need its own
+  // config.db mock just to be introspected by that require.
+  summarizeProducts: (products) =>
+    (products || [])
+      .map((p) => (p.quantity > 1 ? `${p.title || 'Item'} (x${p.quantity})` : p.title || 'Item'))
+      .join(', '),
+}));
 jest.mock('../../src/utils/logger');
-jest.mock('../../src/db/pool', () => ({ query: jest.fn() }));
 
 const { config } = require('../../src/config/env');
 const gupshupService = require('../../src/services/gupshup.service');
 const shopifyOrderEditService = require('../../src/services/shopifyOrderEdit.service');
-const { updateStatusByMessageId, findByMessageId, setResolvingDoctor } = require('../../src/repositories/prescriptionRequest.repository');
+const doctorApprovalFlow = require('../../src/services/doctorApprovalFlow.service');
 const logger = require('../../src/utils/logger');
 const { handleWebhook } = require('../../src/controllers/gupshupWebhook.controller');
 
@@ -61,7 +61,7 @@ it('responds 200 and does nothing when the payload is not a quick_reply', async 
 
   expect(res.status).toHaveBeenCalledWith(200);
   expect(res.json).toHaveBeenCalledWith({ success: true });
-  expect(updateStatusByMessageId).not.toHaveBeenCalled();
+  expect(doctorApprovalFlow.resolve).not.toHaveBeenCalled();
 });
 
 it('responds 200 and does nothing when the button text is not approve/reject', async () => {
@@ -70,87 +70,49 @@ it('responds 200 and does nothing when the button text is not approve/reject', a
 
   await handleWebhook(req, res);
 
-  expect(updateStatusByMessageId).not.toHaveBeenCalled();
+  expect(doctorApprovalFlow.resolve).not.toHaveBeenCalled();
   expect(res.status).toHaveBeenCalledWith(200);
 });
 
-describe('approve reply matching a pending request', () => {
-  const updatedRow = {
+describe('a reply that resolves the request', () => {
+  const request = {
     id: 1,
     customer_phone: '+919999999999',
     customer_name: 'Jane Doe',
     products: [{ title: 'Amoxicillin', quantity: 2 }],
-    gupshup_message_id: 'gs-1',
-    secondary_gupshup_message_id: null,
-    tertiary_gupshup_message_id: null,
+    status: 'approved',
   };
 
   beforeEach(() => {
-    updateStatusByMessageId.mockResolvedValue(updatedRow);
+    doctorApprovalFlow.resolve.mockResolvedValue({ outcome: 'resolved', request, slot: 'primary' });
   });
 
-  it('updates status, notifies the customer, and notifies the other configured doctor', async () => {
+  it('calls resolve with the button text mapped to a status, and notifies the customer', async () => {
     const req = { body: buildQuickReply('Approve', 'gs-1') };
     const res = mockRes();
 
     await handleWebhook(req, res);
 
-    expect(updateStatusByMessageId).toHaveBeenCalledWith('gs-1', 'approved');
-    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenCalledTimes(2);
-
-    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenNthCalledWith(1, {
+    expect(doctorApprovalFlow.resolve).toHaveBeenCalledWith('gs-1', 'approved');
+    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenCalledWith({
       to: '+919999999999',
       contentVariables: { 1: 'Jane Doe', 2: 'Amoxicillin (x2)', 3: 'Approved' },
     });
-
-    // Primary doctor (gs-1) responded, so only the secondary doctor is "other".
-    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenNthCalledWith(2, {
-      to: '+912222222222',
-      templateId: undefined,
-      contentVariables: { 1: 'Jane Doe', 2: 'Amoxicillin (x2)', 3: 'Approved' },
-    });
-
     expect(res.json).toHaveBeenCalledWith({ success: true });
   });
 
-  it('records which doctor resolved the request', async () => {
-    const req = { body: buildQuickReply('Approve', 'gs-1') };
-    await handleWebhook(req, mockRes());
-
-    expect(setResolvingDoctor).toHaveBeenCalledWith(1, 'Dr Primary', '+911111111111');
-  });
-
-  it('uses the doctor-status template with the responding doctor name when configured', async () => {
-    config.gupshup.doctorStatusTemplateId = 'doctor-status-template-id';
-
-    const req = { body: buildQuickReply('Approve', 'gs-1') };
-    await handleWebhook(req, mockRes());
-
-    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenNthCalledWith(2, {
-      to: '+912222222222',
-      templateId: 'doctor-status-template-id',
-      contentVariables: { 1: 'Jane Doe', 2: 'Dr Primary', 3: 'Approved' },
-    });
-
-    config.gupshup.doctorStatusTemplateId = undefined;
-  });
-
-  it('treats a reject button the same way, with "Rejected" status', async () => {
+  it('maps a Reject tap to the "rejected" status', async () => {
     const req = { body: buildQuickReply('Reject', 'gs-1') };
     await handleWebhook(req, mockRes());
 
-    expect(updateStatusByMessageId).toHaveBeenCalledWith('gs-1', 'rejected');
-    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenNthCalledWith(1, {
-      to: '+919999999999',
-      contentVariables: { 1: 'Jane Doe', 2: 'Amoxicillin (x2)', 3: 'Rejected' },
-    });
+    expect(doctorApprovalFlow.resolve).toHaveBeenCalledWith('gs-1', 'rejected');
   });
 
   it('button text matching is case-insensitive and trims whitespace', async () => {
     const req = { body: buildQuickReply('  APPROVE  ', 'gs-1') };
     await handleWebhook(req, mockRes());
 
-    expect(updateStatusByMessageId).toHaveBeenCalledWith('gs-1', 'approved');
+    expect(doctorApprovalFlow.resolve).toHaveBeenCalledWith('gs-1', 'approved');
   });
 
   it('continues (still responds 200) when notifying the customer fails', async () => {
@@ -164,56 +126,21 @@ describe('approve reply matching a pending request', () => {
   });
 });
 
-it('replies to the secondary doctor number the same way, resolving "other doctors" relative to it', async () => {
-  updateStatusByMessageId.mockResolvedValue({
-    id: 1,
-    customer_phone: '+919999999999',
-    customer_name: 'Jane Doe',
-    products: [],
-    gupshup_message_id: 'gs-primary',
-    secondary_gupshup_message_id: 'gs-2',
-    tertiary_gupshup_message_id: null,
-  });
-
-  const req = { body: buildQuickReply('Approve', 'gs-2') };
-  await handleWebhook(req, mockRes());
-
-  expect(gupshupService.sendStatusTemplateMessage).toHaveBeenNthCalledWith(2, {
-    to: '+911111111111',
-    templateId: undefined,
-    contentVariables: { 1: 'Jane Doe', 2: 'a prescription request', 3: 'Approved' },
-  });
-});
-
-describe('no pending request matches the reply', () => {
-  beforeEach(() => {
-    updateStatusByMessageId.mockResolvedValue(null);
-  });
-
-  it('logs that it was already resolved, but sends nothing when the late reply cannot be matched to a configured doctor number', async () => {
-    findByMessageId.mockResolvedValue({ id: 1, status: 'approved' });
-
-    const req = { body: buildQuickReply('Approve', 'gs-1') };
-    await handleWebhook(req, mockRes());
-
-    expect(findByMessageId).toHaveBeenCalledWith('gs-1');
-    expect(gupshupService.sendStatusTemplateMessage).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(
-      'Button reply received for a request that is already resolved',
-      expect.objectContaining({ id: 1, status: 'approved' }),
-    );
-  });
-
-  it('notifies the late-replying doctor that the request was already resolved', async () => {
-    findByMessageId.mockResolvedValue({
-      id: 1,
-      status: 'approved',
-      customer_name: 'Jane Doe',
-      products: [],
-      doctor_name: 'Dr Primary',
-      doctor_mobile: '+911111111111',
-      gupshup_message_id: 'gs-primary',
-      secondary_gupshup_message_id: 'gs-2',
+describe('a late reply (already resolved by another doctor)', () => {
+  it('notifies the late-replying doctor with the actual final status', async () => {
+    doctorApprovalFlow.resolve.mockResolvedValue({
+      outcome: 'late',
+      slot: 'secondary',
+      doctorName: 'Dr Secondary',
+      doctorMobile: '+912222222222',
+      request: {
+        id: 1,
+        customer_name: 'Jane Doe',
+        products: [],
+        status: 'approved',
+        doctor_name: 'Dr Primary',
+        doctor_mobile: '+911111111111',
+      },
     });
 
     const req = { body: buildQuickReply('Approve', 'gs-2') };
@@ -226,46 +153,72 @@ describe('no pending request matches the reply', () => {
     });
   });
 
-  it('sends nothing when the late reply is a double-tap from the same doctor who already resolved it', async () => {
-    findByMessageId.mockResolvedValue({
-      id: 1,
-      status: 'approved',
-      customer_name: 'Jane Doe',
-      products: [],
-      doctor_name: 'Dr Primary',
-      doctor_mobile: '+911111111111',
-      gupshup_message_id: 'gs-primary',
-      secondary_gupshup_message_id: 'gs-2',
+  it('uses the doctor-status template with the resolving doctor name when configured', async () => {
+    config.gupshup.doctorStatusTemplateId = 'doctor-status-template-id';
+    doctorApprovalFlow.resolve.mockResolvedValue({
+      outcome: 'late',
+      slot: 'secondary',
+      doctorName: 'Dr Secondary',
+      doctorMobile: '+912222222222',
+      request: { id: 1, customer_name: 'Jane Doe', products: [], status: 'approved', doctor_name: 'Dr Primary', doctor_mobile: '+911111111111' },
     });
 
-    const req = { body: buildQuickReply('Approve', 'gs-primary') };
-    await handleWebhook(req, mockRes());
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-2') }, mockRes());
+
+    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenCalledWith({
+      to: '+912222222222',
+      templateId: 'doctor-status-template-id',
+      contentVariables: { 1: 'Jane Doe', 2: 'Dr Primary', 3: 'Approved' },
+    });
+
+    config.gupshup.doctorStatusTemplateId = undefined;
+  });
+
+  it('sends nothing when the late reply is a double-tap from the doctor who actually resolved it', async () => {
+    doctorApprovalFlow.resolve.mockResolvedValue({
+      outcome: 'late',
+      slot: 'primary',
+      doctorName: 'Dr Primary',
+      doctorMobile: '+911111111111',
+      request: { id: 1, customer_name: 'Jane Doe', products: [], status: 'approved', doctor_name: 'Dr Primary', doctor_mobile: '+911111111111' },
+    });
+
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, mockRes());
 
     expect(gupshupService.sendStatusTemplateMessage).not.toHaveBeenCalled();
   });
+});
 
-  it('logs a warning when no matching row exists at all', async () => {
-    findByMessageId.mockResolvedValue(null);
+it('logs and sends nothing for a duplicate delivery of an already-superseded reply', async () => {
+  doctorApprovalFlow.resolve.mockResolvedValue({ outcome: 'duplicate' });
 
-    const req = { body: buildQuickReply('Approve', 'unknown-gs-id') };
-    await handleWebhook(req, mockRes());
+  await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, mockRes());
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      'Button reply received but no matching prescription request found',
-      { gupshupMessageId: 'unknown-gs-id' },
-    );
-  });
+  expect(gupshupService.sendStatusTemplateMessage).not.toHaveBeenCalled();
+  expect(logger.info).toHaveBeenCalledWith(
+    'Duplicate webhook delivery for an already-superseded reply, ignoring',
+    expect.objectContaining({ gupshupMessageId: 'gs-1' }),
+  );
+});
+
+it('logs a warning when the message id is not recognized at all', async () => {
+  doctorApprovalFlow.resolve.mockResolvedValue({ outcome: 'unknown' });
+
+  await handleWebhook({ body: buildQuickReply('Approve', 'unknown-gs-id') }, mockRes());
+
+  expect(logger.warn).toHaveBeenCalledWith(
+    'Button reply received but no matching prescription request found',
+    { gupshupMessageId: 'unknown-gs-id' },
+  );
 });
 
 describe('Shopify order resolution side effects (RX_ORDER_HOLD_ACTIONS_ENABLED)', () => {
-  const rowWithOrderGid = {
+  const requestWithOrderGid = {
     id: 1,
     customer_phone: '+919999999999',
     customer_name: 'Jane Doe',
     products: [{ title: 'Amoxicillin', quantity: 2, variant_id: 555 }],
-    gupshup_message_id: 'gs-1',
-    secondary_gupshup_message_id: null,
-    tertiary_gupshup_message_id: null,
+    status: 'approved',
     shopify_order_gid: 'gid://shopify/Order/123',
   };
 
@@ -273,22 +226,24 @@ describe('Shopify order resolution side effects (RX_ORDER_HOLD_ACTIONS_ENABLED)'
     config.shopify.rxOrderHoldActionsEnabled = false;
   });
 
-  it('does nothing when the feature flag is off, even with a shopify_order_gid on the row', async () => {
-    updateStatusByMessageId.mockResolvedValue(rowWithOrderGid);
+  it('does nothing when the feature flag is off, even with a shopify_order_gid on the request', async () => {
+    doctorApprovalFlow.resolve.mockResolvedValue({ outcome: 'resolved', request: requestWithOrderGid, slot: 'primary' });
 
-    const req = { body: buildQuickReply('Approve', 'gs-1') };
-    await handleWebhook(req, mockRes());
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, mockRes());
 
     expect(shopifyOrderEditService.clearRxOrderMetafield).not.toHaveBeenCalled();
     expect(shopifyOrderEditService.holdOrderLineItem).not.toHaveBeenCalled();
   });
 
-  it('does nothing when the flag is on but the row has no shopify_order_gid (pre-migration request)', async () => {
+  it('does nothing when the flag is on but the request has no shopify_order_gid (pre-migration request)', async () => {
     config.shopify.rxOrderHoldActionsEnabled = true;
-    updateStatusByMessageId.mockResolvedValue({ ...rowWithOrderGid, shopify_order_gid: null });
+    doctorApprovalFlow.resolve.mockResolvedValue({
+      outcome: 'resolved',
+      request: { ...requestWithOrderGid, shopify_order_gid: null },
+      slot: 'primary',
+    });
 
-    const req = { body: buildQuickReply('Approve', 'gs-1') };
-    await handleWebhook(req, mockRes());
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, mockRes());
 
     expect(shopifyOrderEditService.clearRxOrderMetafield).not.toHaveBeenCalled();
     expect(shopifyOrderEditService.holdOrderLineItem).not.toHaveBeenCalled();
@@ -296,10 +251,9 @@ describe('Shopify order resolution side effects (RX_ORDER_HOLD_ACTIONS_ENABLED)'
 
   it('clears the rx metafield on approve when the flag is on', async () => {
     config.shopify.rxOrderHoldActionsEnabled = true;
-    updateStatusByMessageId.mockResolvedValue(rowWithOrderGid);
+    doctorApprovalFlow.resolve.mockResolvedValue({ outcome: 'resolved', request: { ...requestWithOrderGid, status: 'approved' }, slot: 'primary' });
 
-    const req = { body: buildQuickReply('Approve', 'gs-1') };
-    await handleWebhook(req, mockRes());
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, mockRes());
 
     expect(shopifyOrderEditService.clearRxOrderMetafield).toHaveBeenCalledWith('gid://shopify/Order/123');
     expect(shopifyOrderEditService.removeOrderTag).toHaveBeenCalledWith('gid://shopify/Order/123', 'rx_prescription_order');
@@ -308,28 +262,22 @@ describe('Shopify order resolution side effects (RX_ORDER_HOLD_ACTIONS_ENABLED)'
 
   it('holds each Rx line item then clears the metafield on reject when the flag is on', async () => {
     config.shopify.rxOrderHoldActionsEnabled = true;
-    updateStatusByMessageId.mockResolvedValue(rowWithOrderGid);
+    doctorApprovalFlow.resolve.mockResolvedValue({ outcome: 'resolved', request: { ...requestWithOrderGid, status: 'rejected' }, slot: 'primary' });
 
-    const req = { body: buildQuickReply('Reject', 'gs-1') };
-    await handleWebhook(req, mockRes());
+    await handleWebhook({ body: buildQuickReply('Reject', 'gs-1') }, mockRes());
 
-    expect(shopifyOrderEditService.holdOrderLineItem).toHaveBeenCalledWith(
-      'gid://shopify/Order/123',
-      555,
-      undefined,
-    );
+    expect(shopifyOrderEditService.holdOrderLineItem).toHaveBeenCalledWith('gid://shopify/Order/123', 555, undefined);
     expect(shopifyOrderEditService.clearRxOrderMetafield).toHaveBeenCalledWith('gid://shopify/Order/123');
     expect(shopifyOrderEditService.removeOrderTag).toHaveBeenCalledWith('gid://shopify/Order/123', 'rx_prescription_order');
   });
 
   it('still responds 200 and does not block already-sent notifications when the Shopify call fails', async () => {
     config.shopify.rxOrderHoldActionsEnabled = true;
-    updateStatusByMessageId.mockResolvedValue(rowWithOrderGid);
+    doctorApprovalFlow.resolve.mockResolvedValue({ outcome: 'resolved', request: requestWithOrderGid, slot: 'primary' });
     shopifyOrderEditService.clearRxOrderMetafield.mockRejectedValueOnce(new Error('shopify down'));
 
-    const req = { body: buildQuickReply('Approve', 'gs-1') };
     const res = mockRes();
-    await handleWebhook(req, res);
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, res);
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(gupshupService.sendStatusTemplateMessage).toHaveBeenCalled();
@@ -341,11 +289,10 @@ describe('Shopify order resolution side effects (RX_ORDER_HOLD_ACTIONS_ENABLED)'
 });
 
 it('always responds 200 even when an unexpected error is thrown', async () => {
-  updateStatusByMessageId.mockRejectedValue(new Error('db exploded'));
+  doctorApprovalFlow.resolve.mockRejectedValue(new Error('db exploded'));
 
-  const req = { body: buildQuickReply('Approve', 'gs-1') };
   const res = mockRes();
-  await handleWebhook(req, res);
+  await handleWebhook({ body: buildQuickReply('Approve', 'gs-1') }, res);
 
   expect(res.status).toHaveBeenCalledWith(200);
   expect(res.json).toHaveBeenCalledWith({ success: true });

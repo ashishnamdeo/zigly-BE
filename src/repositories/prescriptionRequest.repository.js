@@ -1,10 +1,6 @@
 const pool = require('../db/pool');
 
 async function createPrescriptionRequest({
-  gupshupMessageId,
-  secondaryGupshupMessageId,
-  tertiaryGupshupMessageId,
-  quaternaryGupshupMessageId,
   customerName,
   customerPhone,
   method,
@@ -13,17 +9,14 @@ async function createPrescriptionRequest({
   medicineName,
   shopifyOrderId,
   shopifyOrderGid,
+  status = 'pending_primary',
 }) {
   const result = await pool.query(
     `INSERT INTO prescription_requests
-       (gupshup_message_id, secondary_gupshup_message_id, tertiary_gupshup_message_id, quaternary_gupshup_message_id, customer_name, customer_phone, method, file_url, products, medicine_name, shopify_order_id, shopify_order_gid)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       (customer_name, customer_phone, method, file_url, products, medicine_name, shopify_order_id, shopify_order_gid, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
     [
-      gupshupMessageId,
-      secondaryGupshupMessageId || null,
-      tertiaryGupshupMessageId || null,
-      quaternaryGupshupMessageId || null,
       customerName,
       customerPhone,
       method,
@@ -32,56 +25,112 @@ async function createPrescriptionRequest({
       medicineName || null,
       shopifyOrderId || null,
       shopifyOrderGid || null,
+      status,
     ],
   );
   return result.rows[0].id;
 }
 
-// Matches on the primary, secondary, or tertiary send's messageId, since all
-// configured doctors get the request at the same time and any of them may
-// reply first. The status = 'pending' guard makes the first reply win — once
-// one doctor has responded, a later reply from another number is a no-op
-// rather than silently overwriting an already-notified decision.
-async function updateStatusByMessageId(gupshupMessageId, status) {
+async function getRequestById(id) {
   const result = await pool.query(
-    `UPDATE prescription_requests
-     SET status = $2, responded_at = now()
-     WHERE (gupshup_message_id = $1 OR secondary_gupshup_message_id = $1 OR tertiary_gupshup_message_id = $1 OR quaternary_gupshup_message_id = $1)
-       AND status = 'pending'
-     RETURNING id, customer_phone, customer_name, products, gupshup_message_id, secondary_gupshup_message_id, tertiary_gupshup_message_id, quaternary_gupshup_message_id, shopify_order_gid`,
-    [gupshupMessageId, status],
+    `SELECT id, status, customer_name, customer_phone, method, file_url, products,
+            medicine_name, doctor_name, doctor_mobile, shopify_order_gid, responded_at
+     FROM prescription_requests WHERE id = $1`,
+    [id],
   );
   return result.rows[0] || null;
 }
 
-// Used when updateStatusByMessageId finds no pending row to update, to tell
-// apart "already resolved by another doctor" (row exists) from a truly
-// unrecognized message id (row doesn't exist). The extra columns beyond
-// id/status let the caller both identify which doctor's number this late
-// reply came in on (the message-id columns) and tell them who already
-// resolved it (doctor_name, customer_name, products).
-async function findByMessageId(gupshupMessageId) {
+// The single guard the whole sequential flow rests on: only succeeds if the
+// request is still exactly where the caller expects (fromStatus). A doctor's
+// reply and the escalation timer both call this with the same shape of
+// query — Postgres's row lock, not application code, decides who wins a true
+// tie; the loser's call affects 0 rows and is a safe no-op for the caller to
+// check via the return value.
+async function transitionRequestStatus(id, fromStatus, toStatus, { doctorName, doctorMobile } = {}) {
+  const setDoctor = doctorName !== undefined || doctorMobile !== undefined;
   const result = await pool.query(
-    `SELECT id, status, customer_name, products, doctor_name,
-            gupshup_message_id, secondary_gupshup_message_id, tertiary_gupshup_message_id, quaternary_gupshup_message_id
-     FROM prescription_requests
-     WHERE gupshup_message_id = $1 OR secondary_gupshup_message_id = $1 OR tertiary_gupshup_message_id = $1 OR quaternary_gupshup_message_id = $1`,
+    setDoctor
+      ? `UPDATE prescription_requests
+         SET status = $2, responded_at = now(), doctor_name = $3, doctor_mobile = $4
+         WHERE id = $1 AND status = $5
+         RETURNING id, status, customer_name, customer_phone, method, file_url, products, doctor_name, doctor_mobile, shopify_order_gid`
+      : `UPDATE prescription_requests
+         SET status = $2
+         WHERE id = $1 AND status = $3
+         RETURNING id, status, customer_name, customer_phone, method, file_url, products, doctor_name, doctor_mobile, shopify_order_gid`,
+    setDoctor ? [id, toStatus, doctorName || null, doctorMobile || null, fromStatus] : [id, toStatus, fromStatus],
+  );
+  return result.rows[0] || null;
+}
+
+async function insertDoctorRequestLog({ prescriptionRequestId, doctorSlot, doctorName, doctorMobile, gupshupMessageId }) {
+  const result = await pool.query(
+    `INSERT INTO doctor_request_log (prescription_request_id, doctor_slot, doctor_name, doctor_mobile, gupshup_message_id)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [prescriptionRequestId, doctorSlot, doctorName || null, doctorMobile || null, gupshupMessageId || null],
+  );
+  return result.rows[0].id;
+}
+
+async function markDoctorLogSendFailed(logId, errorDetail) {
+  await pool.query(`UPDATE doctor_request_log SET outcome = 'send_failed', error_detail = $2 WHERE id = $1`, [
+    logId,
+    errorDetail || null,
+  ]);
+}
+
+async function markDoctorLogResponded(logId, response) {
+  await pool.query(
+    `UPDATE doctor_request_log SET outcome = 'responded', responded_at = now(), response = $2 WHERE id = $1`,
+    [logId, response],
+  );
+}
+
+// Guarded on outcome != 'superseded' so a duplicate delivery of an
+// already-late reply (Gupshup redelivering the same webhook) updates 0 rows
+// the second time — the caller uses that to decide whether to re-notify the
+// doctor (first time) or silently no-op (duplicate).
+async function markDoctorLogSuperseded(logId, response) {
+  const result = await pool.query(
+    `UPDATE doctor_request_log SET outcome = 'superseded', responded_at = now(), response = $2
+     WHERE id = $1 AND outcome != 'superseded'
+     RETURNING id`,
+    [logId, response],
+  );
+  return result.rows.length > 0;
+}
+
+async function markDoctorLogExpired(logId) {
+  await pool.query(`UPDATE doctor_request_log SET outcome = 'expired' WHERE id = $1 AND outcome = 'awaiting'`, [logId]);
+}
+
+// The one lookup an incoming Approve/Reject webhook reply needs: which
+// request, which slot, whether this attempt is still awaiting a reply, and
+// the parent request's current status/customer/doctor info in one round trip.
+async function findDoctorLogByMessageId(gupshupMessageId) {
+  const result = await pool.query(
+    `SELECT l.id AS log_id, l.doctor_slot, l.outcome, l.prescription_request_id,
+            r.status AS request_status, r.customer_name, r.customer_phone, r.products,
+            r.doctor_name, r.doctor_mobile, r.shopify_order_gid
+     FROM doctor_request_log l
+     JOIN prescription_requests r ON r.id = l.prescription_request_id
+     WHERE l.gupshup_message_id = $1`,
     [gupshupMessageId],
   );
   return result.rows[0] || null;
 }
 
-// Snapshots which configured doctor slot (name + number, from env config —
-// not a foreign key) resolved a request, captured the moment their
-// Approve/Reject reply comes in. Repurposes the doctor_name/doctor_mobile
-// columns, originally meant for a pharmacist to transcribe the *prescribing*
-// doctor from the uploaded photo — that pharmacist-review flow was never
-// built, so there's nothing else populating these columns.
-async function setResolvingDoctor(id, doctorName, doctorMobile) {
-  await pool.query(
-    `UPDATE prescription_requests SET doctor_name = $2, doctor_mobile = $3 WHERE id = $1`,
-    [id, doctorName || null, doctorMobile || null],
+// At most one row can ever be 'awaiting' for a given request+slot (each slot
+// is only ever paged once) — used by the escalation checker to mark that
+// attempt 'expired' once its 60s window has passed with no reply.
+async function findAwaitingDoctorLog(prescriptionRequestId, doctorSlot) {
+  const result = await pool.query(
+    `SELECT id FROM doctor_request_log WHERE prescription_request_id = $1 AND doctor_slot = $2 AND outcome = 'awaiting' LIMIT 1`,
+    [prescriptionRequestId, doctorSlot],
   );
+  return result.rows[0] || null;
 }
 
 // Matches on the last 10 digits on both sides since customer_phone is stored
@@ -114,9 +163,15 @@ async function existsByShopifyOrderId(shopifyOrderId) {
 
 module.exports = {
   createPrescriptionRequest,
-  updateStatusByMessageId,
-  findByMessageId,
-  setResolvingDoctor,
+  getRequestById,
+  transitionRequestStatus,
+  insertDoctorRequestLog,
+  markDoctorLogSendFailed,
+  markDoctorLogResponded,
+  markDoctorLogSuperseded,
+  markDoctorLogExpired,
+  findDoctorLogByMessageId,
+  findAwaitingDoctorLog,
   findRecentByPhone,
   existsByShopifyOrderId,
 };

@@ -96,6 +96,21 @@ const config = {
     rxOrderHoldActionsEnabled: process.env.RX_ORDER_HOLD_ACTIONS_ENABLED === 'true',
   },
 
+  // Sequential Primary -> Secondary -> Tertiary -> Quaternary doctor
+  // approval chain — see doctorApprovalFlow.service.js / escalationScheduler.service.js.
+  escalation: {
+    // Seconds a doctor slot gets before the chain auto-escalates to the next one.
+    windowSeconds: Number(process.env.DOCTOR_ESCALATION_SECONDS) || 60,
+    // AWS_REGION is a reserved Lambda runtime env var, always set in prod.
+    region: process.env.AWS_REGION || 'ap-south-1',
+    // This Lambda's own function ARN — EventBridge Scheduler's invocation
+    // target. e.g. arn:aws:lambda:ap-south-1:ACCOUNT_ID:function:zigly-prescription-upload
+    lambdaFunctionArn: process.env.ESCALATION_LAMBDA_ARN,
+    // IAM role EventBridge Scheduler assumes to invoke the Lambda above —
+    // created once outside the app (see docs), not app-managed.
+    schedulerRoleArn: process.env.ESCALATION_SCHEDULER_ROLE_ARN,
+  },
+
   maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB) || 10,
 
   s3: {
