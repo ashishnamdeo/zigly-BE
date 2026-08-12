@@ -175,7 +175,16 @@ describe('doctor_request_log helpers', () => {
     pool.query.mockResolvedValue({ rows: [row] });
 
     expect(await findDoctorLogByMessageId('gs-1')).toEqual(row);
-    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('JOIN prescription_requests r'), ['gs-1']);
+    const [sql] = pool.query.mock.calls[0];
+    expect(sql).toContain('JOIN prescription_requests r');
+    // Regression guard: doctor_name/doctor_mobile must come from the log (l.*)
+    // — this attempt's own doctor — not the request (r.*), which is still
+    // null pre-resolution. Selecting r.doctor_name/r.doctor_mobile here silently
+    // makes resolve() record a null doctor on every successful approval/rejection.
+    expect(sql).toMatch(/l\.doctor_name/);
+    expect(sql).toMatch(/l\.doctor_mobile/);
+    expect(sql).not.toMatch(/r\.doctor_name/);
+    expect(sql).not.toMatch(/r\.doctor_mobile/);
   });
 
   it('findDoctorLogByMessageId returns null when unrecognized', async () => {

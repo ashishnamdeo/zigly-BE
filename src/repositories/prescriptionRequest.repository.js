@@ -111,9 +111,14 @@ async function markDoctorLogExpired(logId) {
 // the parent request's current status/customer/doctor info in one round trip.
 async function findDoctorLogByMessageId(gupshupMessageId) {
   const result = await pool.query(
+    // doctor_name/doctor_mobile here are the LOG's own (l.*) — i.e. the doctor
+    // this specific attempt paged — not the request's already-resolved
+    // doctor (r.*, still null pre-resolution). resolve() needs this attempt's
+    // doctor to record who just resolved it / who is replying late.
     `SELECT l.id AS log_id, l.doctor_slot, l.outcome, l.prescription_request_id,
+            l.doctor_name, l.doctor_mobile,
             r.status AS request_status, r.customer_name, r.customer_phone, r.products,
-            r.doctor_name, r.doctor_mobile, r.shopify_order_gid
+            r.shopify_order_gid
      FROM doctor_request_log l
      JOIN prescription_requests r ON r.id = l.prescription_request_id
      WHERE l.gupshup_message_id = $1`,
