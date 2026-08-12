@@ -24,6 +24,16 @@ function templateIdForMethod(method) {
   return config.gupshup.templateId;
 }
 
+// The dedicated consult template's header component is TEXT, not IMAGE (unlike
+// the upload template, whose header is the prescription photo) — attaching
+// CONSULT_HEADER_IMAGE_URL to it gets the whole send rejected by WhatsApp with
+// a (#2012) header format-mismatch error. Only suppress the header when the
+// consult template is actually in play; the upload-template fallback (consult
+// template unconfigured) still needs its banner image.
+function usesConsultTemplate(method) {
+  return method === 'consult' && Boolean(config.gupshup.consultTemplateId);
+}
+
 function summarizeProducts(products) {
   return (products || [])
     .map((product) => {
@@ -112,7 +122,13 @@ async function startFlow({ customerName, customerPhone, method, fileUrl, product
     return requestId;
   }
 
-  await pageDoctor(requestId, first, { customerName, customerPhone, products, headerImageUrl, templateId: templateIdForMethod(method) });
+  await pageDoctor(requestId, first, {
+    customerName,
+    customerPhone,
+    products,
+    headerImageUrl: usesConsultTemplate(method) ? null : headerImageUrl,
+    templateId: templateIdForMethod(method),
+  });
   return requestId;
 }
 
@@ -178,7 +194,7 @@ async function escalate({ requestId, slot }) {
     customerName: won.customer_name,
     customerPhone: won.customer_phone,
     products: won.products,
-    headerImageUrl: won.file_url || CONSULT_HEADER_IMAGE_URL,
+    headerImageUrl: usesConsultTemplate(won.method) ? null : won.file_url || CONSULT_HEADER_IMAGE_URL,
     templateId: templateIdForMethod(won.method),
   });
 

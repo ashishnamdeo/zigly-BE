@@ -52,7 +52,7 @@ describe('startFlow', () => {
     expect(gupshupService.sendTemplateMessage).toHaveBeenCalledTimes(1);
     expect(gupshupService.sendTemplateMessage).toHaveBeenCalledWith({
       contentVariables: { 1: 'Jane Doe', 2: '+919999999999', 3: 'Amoxicillin (x2)' },
-      headerImageUrl: 'https://example.com/banner.png',
+      headerImageUrl: null,
       destination: '+911111111111',
       templateId: 'consult-template-id',
     });
@@ -185,7 +185,7 @@ describe('escalate', () => {
     expect(repo.markDoctorLogExpired).toHaveBeenCalledWith('log-1');
     expect(gupshupService.sendTemplateMessage).toHaveBeenCalledWith({
       contentVariables: { 1: 'Jane Doe', 2: '+919999999999', 3: 'Amoxicillin (x2)' },
-      headerImageUrl: flow.CONSULT_HEADER_IMAGE_URL,
+      headerImageUrl: null,
       destination: '+912222222222',
       templateId: 'consult-template-id',
     });
