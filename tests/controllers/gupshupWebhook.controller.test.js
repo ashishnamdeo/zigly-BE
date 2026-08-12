@@ -153,6 +153,31 @@ describe('a late reply (already resolved by another doctor)', () => {
     });
   });
 
+  it('uses a real label (not undefined) when the late reply arrives after the whole chain already timed out', async () => {
+    doctorApprovalFlow.resolve.mockResolvedValue({
+      outcome: 'late',
+      slot: 'quaternary',
+      doctorName: 'Ashish',
+      doctorMobile: '+919540317803',
+      request: {
+        id: 1,
+        customer_name: 'Escalation Test',
+        products: [],
+        status: 'failed',
+        doctor_name: null,
+        doctor_mobile: null,
+      },
+    });
+
+    await handleWebhook({ body: buildQuickReply('Approve', 'gs-quaternary') }, mockRes());
+
+    expect(gupshupService.sendStatusTemplateMessage).toHaveBeenCalledWith({
+      to: '+919540317803',
+      templateId: undefined,
+      contentVariables: { 1: 'Escalation Test', 2: 'a prescription request', 3: 'closed (no doctor responded in time)' },
+    });
+  });
+
   it('uses the doctor-status template with the resolving doctor name when configured', async () => {
     config.gupshup.doctorStatusTemplateId = 'doctor-status-template-id';
     doctorApprovalFlow.resolve.mockResolvedValue({

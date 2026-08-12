@@ -12,6 +12,11 @@ const BUTTON_TO_STATUS = {
 const STATUS_LABEL = {
   approved: 'Approved',
   rejected: 'Rejected',
+  // A late reply can land after the whole chain has already timed out with
+  // nobody responding (doctorApprovalFlow.escalate's terminal 'failed'
+  // state) — found by a real doctor tapping Approve ~40s after their own
+  // window had already closed, which sent this label as `undefined` before.
+  failed: 'closed (no doctor responded in time)',
 };
 
 /**
