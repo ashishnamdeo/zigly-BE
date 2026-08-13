@@ -5,7 +5,6 @@ const WEBHOOK_SECRET = 'test-webhook-secret';
 jest.mock('../../src/config/env', () => ({
   config: {
     shopifyWebhookSecret: 'test-webhook-secret',
-    shopify: { orderOriginAllowlist: '' },
   },
 }));
 jest.mock('../../src/services/shopify.service');
@@ -98,60 +97,6 @@ it('acks 200 without any side effects when the order has no Rx line items', asyn
   expect(res.status).toHaveBeenCalledWith(200);
   expect(existsByShopifyOrderId).not.toHaveBeenCalled();
   expect(doctorApprovalFlow.startFlow).not.toHaveBeenCalled();
-});
-
-describe('order origin allowlist (SHOPIFY_ORDER_ORIGIN_ALLOWLIST)', () => {
-  afterEach(() => {
-    const { config } = require('../../src/config/env');
-    config.shopify.orderOriginAllowlist = '';
-  });
-
-  it('skips processing entirely for an order whose landing_page_url does not match the allowlist', async () => {
-    const { config } = require('../../src/config/env');
-    config.shopify.orderOriginAllowlist = '.shopifypreview.com';
-
-    const order = rxOrder({
-      note_attributes: [{ name: 'landing_page_url', value: 'https://zigly.com/' }],
-    });
-    const res = mockRes();
-
-    await handleOrderCreate(signedRequest(order), res);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(existsByShopifyOrderId).not.toHaveBeenCalled();
-    expect(doctorApprovalFlow.startFlow).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(
-      'Skipping orders/create webhook: order origin not in the test allowlist',
-      expect.objectContaining({ landingPageUrl: 'https://zigly.com/' }),
-    );
-  });
-
-  it('processes an order whose landing_page_url matches the allowlist', async () => {
-    const { config } = require('../../src/config/env');
-    config.shopify.orderOriginAllowlist = '.shopifypreview.com';
-
-    const order = rxOrder({
-      note_attributes: [{ name: 'landing_page_url', value: 'https://abc123-92312043836.shopifypreview.com/' }],
-    });
-    const res = mockRes();
-
-    await handleOrderCreate(signedRequest(order), res);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(doctorApprovalFlow.startFlow).toHaveBeenCalled();
-  });
-
-  it('processes every order when the allowlist is empty (going-live setting)', async () => {
-    const { config } = require('../../src/config/env');
-    config.shopify.orderOriginAllowlist = '';
-
-    const order = rxOrder({ note_attributes: [{ name: 'landing_page_url', value: 'https://zigly.com/' }] });
-    const res = mockRes();
-
-    await handleOrderCreate(signedRequest(order), res);
-
-    expect(doctorApprovalFlow.startFlow).toHaveBeenCalled();
-  });
 });
 
 it('starts the doctor approval flow with a consult method for a new Rx order', async () => {

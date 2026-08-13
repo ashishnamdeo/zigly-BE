@@ -55,20 +55,6 @@ function findUploadKey(order) {
   return match ? match.value : null;
 }
 
-function findLandingPageUrl(order) {
-  const match = (order.note_attributes || []).find((a) => a.name === 'landing_page_url');
-  return match ? match.value : '';
-}
-
-// While this feature is still being tested, only process orders that came
-// from theme-preview traffic — never real zigly.com customers. Controlled by
-// config.shopify.orderOriginAllowlist (see env.js); an empty allowlist means
-// "process every order" for once this is ready to go live.
-function isAllowedOrderOrigin(order) {
-  if (!config.shopify.orderOriginAllowlist) return true;
-  return findLandingPageUrl(order).includes(config.shopify.orderOriginAllowlist);
-}
-
 function summarizeProducts(products) {
   return products
     .map((product) => {
@@ -96,14 +82,6 @@ async function handleOrderCreate(req, res) {
   try {
     const order = req.body;
     const shopifyOrderId = order.name || String(order.id);
-
-    if (!isAllowedOrderOrigin(order)) {
-      logger.info('Skipping orders/create webhook: order origin not in the test allowlist', {
-        shopifyOrderId,
-        landingPageUrl: findLandingPageUrl(order),
-      });
-      return res.status(200).json({ success: true });
-    }
 
     const prescriptionItems = findPrescriptionLineItems(order.line_items);
     const orderGid = order.admin_graphql_api_id || `gid://shopify/Order/${order.id}`;

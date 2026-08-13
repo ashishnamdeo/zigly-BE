@@ -85,15 +85,6 @@ const config = {
     // Unicommerce connector actually watches to hold an order's sync, per
     // the connector team (the metafield is for internal/Admin visibility).
     rxTagName: process.env.SHOPIFY_RX_TAG_NAME || 'rx_prescription_order',
-    // While this feature is still being tested, orders/create only runs its
-    // Rx logic (metafield/tag/WhatsApp/hold) for orders whose landing_page_url
-    // note attribute contains this substring — i.e. only theme-preview
-    // traffic (*.shopifypreview.com), never real zigly.com customers. Set to
-    // an empty string to process every order once ready to go live.
-    orderOriginAllowlist:
-      process.env.SHOPIFY_ORDER_ORIGIN_ALLOWLIST !== undefined
-        ? process.env.SHOPIFY_ORDER_ORIGIN_ALLOWLIST
-        : '.shopifypreview.com',
     // Feature flag for the Approve/Reject → Shopify side effects (clear the
     // rx metafield on approve; cancel the Rx line item + clear the metafield
     // on reject). Defaults off so this stays inert until validated against a
