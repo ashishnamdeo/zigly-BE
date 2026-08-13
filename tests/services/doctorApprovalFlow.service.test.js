@@ -210,7 +210,31 @@ describe('escalate', () => {
     );
   });
 
-  it('marks the request "failed" without paging anyone once the last configured slot has also timed out', async () => {
+  it('loops back to primary for a second round when the last configured slot times out for the first time', async () => {
+    repo.countLogsForSlot.mockResolvedValue(1);
+    repo.transitionRequestStatus.mockResolvedValue({
+      id: 'req-1',
+      customer_name: 'Jane Doe',
+      customer_phone: '+919999999999',
+      products: [{ title: 'Amoxicillin', quantity: 2 }],
+      file_url: null,
+      method: 'consult',
+    });
+    repo.findAwaitingDoctorLog.mockResolvedValue({ id: 'log-3' });
+    gupshupService.sendTemplateMessage.mockResolvedValue({ messageId: 'gs-primary-round2' });
+
+    const result = await flow.escalate({ requestId: 'req-1', slot: 'tertiary' });
+
+    expect(repo.countLogsForSlot).toHaveBeenCalledWith('req-1', 'primary');
+    expect(repo.transitionRequestStatus).toHaveBeenCalledWith('req-1', 'pending_tertiary', 'pending_primary', {});
+    expect(gupshupService.sendTemplateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ destination: '+911111111111' }),
+    );
+    expect(result).toEqual({ outcome: 'escalated', to: 'primary', round: 2 });
+  });
+
+  it('marks the request "failed" without paging anyone once the last configured slot has also timed out on the second round', async () => {
+    repo.countLogsForSlot.mockResolvedValue(2);
     repo.transitionRequestStatus.mockResolvedValue({ id: 'req-1', status: 'failed' });
     repo.findAwaitingDoctorLog.mockResolvedValue({ id: 'log-3' });
 

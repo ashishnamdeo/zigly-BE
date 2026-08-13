@@ -127,9 +127,22 @@ async function findDoctorLogByMessageId(gupshupMessageId) {
   return result.rows[0] || null;
 }
 
-// At most one row can ever be 'awaiting' for a given request+slot (each slot
-// is only ever paged once) — used by the escalation checker to mark that
-// attempt 'expired' once its 60s window has passed with no reply.
+// Counts every attempt (any outcome) at a given slot for this request — used
+// by escalate() to tell how many full primary->...->quaternary rounds have
+// run, since a slot is paged again each time the chain loops back for
+// another round.
+async function countLogsForSlot(prescriptionRequestId, doctorSlot) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM doctor_request_log WHERE prescription_request_id = $1 AND doctor_slot = $2`,
+    [prescriptionRequestId, doctorSlot],
+  );
+  return result.rows[0].count;
+}
+
+// At most one row can ever be 'awaiting' for a given request+slot within the
+// same round (each slot is paged once per round) — used by the escalation
+// checker to mark that attempt 'expired' once its 60s window has passed with
+// no reply.
 async function findAwaitingDoctorLog(prescriptionRequestId, doctorSlot) {
   const result = await pool.query(
     `SELECT id FROM doctor_request_log WHERE prescription_request_id = $1 AND doctor_slot = $2 AND outcome = 'awaiting' LIMIT 1`,
@@ -176,6 +189,7 @@ module.exports = {
   markDoctorLogSuperseded,
   markDoctorLogExpired,
   findDoctorLogByMessageId,
+  countLogsForSlot,
   findAwaitingDoctorLog,
   findRecentByPhone,
   existsByShopifyOrderId,

@@ -169,14 +169,29 @@ async function resolve(gupshupMessageId, decision) {
   };
 }
 
+// How many full primary->...->quaternary rounds to run before giving up for
+// good. 2 means: if the last configured doctor times out once, page
+// everyone again from the top; only if that second round also exhausts does
+// the request finally become 'failed'.
+const MAX_ROUNDS = 2;
+
 /**
  * Called by the EventBridge Scheduler check, `windowSeconds` after a doctor
  * was paged. If they haven't replied, moves the chain to the next configured
- * slot (or to 'failed' if this was the last one). Loses cleanly — 0 rows,
- * no-op — if the doctor's reply already won the race moments earlier.
+ * slot. Once the last configured slot also times out, loops back to primary
+ * for another round (up to MAX_ROUNDS total) before finally giving up and
+ * marking the request 'failed'. Loses cleanly — 0 rows, no-op — if the
+ * doctor's reply already won the race moments earlier.
  */
 async function escalate({ requestId, slot }) {
-  const next = doctorRoster.nextSlotAfter(slot);
+  let next = doctorRoster.nextSlotAfter(slot);
+  let roundsSoFar;
+
+  if (!next) {
+    roundsSoFar = await repo.countLogsForSlot(requestId, 'primary');
+    if (roundsSoFar < MAX_ROUNDS) next = doctorRoster.getConfiguredDoctors()[0];
+  }
+
   const toStatus = next ? statusForSlot(next.slot) : 'failed';
 
   const won = await repo.transitionRequestStatus(requestId, statusForSlot(slot), toStatus, {});
@@ -186,7 +201,7 @@ async function escalate({ requestId, slot }) {
   if (awaitingLog) await repo.markDoctorLogExpired(awaitingLog.id);
 
   if (!next) {
-    logger.error('Doctor approval chain exhausted — no configured doctor responded', { requestId });
+    logger.error('Doctor approval chain exhausted after all retry rounds — no configured doctor responded', { requestId });
     return { outcome: 'failed' };
   }
 
@@ -198,7 +213,9 @@ async function escalate({ requestId, slot }) {
     templateId: templateIdForMethod(won.method),
   });
 
-  return { outcome: 'escalated', to: next.slot };
+  return roundsSoFar
+    ? { outcome: 'escalated', to: next.slot, round: roundsSoFar + 1 }
+    : { outcome: 'escalated', to: next.slot };
 }
 
 module.exports = { startFlow, resolve, escalate, statusForSlot, summarizeProducts, CONSULT_HEADER_IMAGE_URL };
